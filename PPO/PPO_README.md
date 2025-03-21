@@ -1,7 +1,11 @@
-
+## commands used to run
 pyenv activate ai-poker-agent
 pip install torch
 pip install numpy
+pip install tensorboard
+
+    python3 ./PPO/train.py  
+    tensorboard --logdir ./PPO/runs 
 
 ## references 
 papers (PPO):
@@ -20,4 +24,8 @@ https://github.com/seungeunrho/minimalRL/tree/master
 
 ## Notes/Questions
 BB/100 metric
-Improving after training? How to measure - 
+
+TODO:
+Need to update trained metrics and keep it saved somehow
+Need to think of opponent features - currently not really learning from opponent behaviors
+Should we throw in wild card rounds? (i.e. decide strategy with some uncertainty)

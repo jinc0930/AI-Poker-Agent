@@ -3,142 +3,172 @@ import torch.nn as nn
 
 def card_to_num(card_str):
     """
-    Convert a card string (e.g., '8S', 'QH') to a tuple of (rank, suit).
+    Convert a card string (e.g., 'S8', 'HQ') to a tuple of (rank, suit).
 
     Args:
-        card_str: String representation of a card (e.g., '8S', 'QH', 'TC', 'AD')
+        card_str: String representation of a card
                  T=10, J=Jack, Q=Queen, K=King, A=Ace
                  C=Clubs, D=Diamonds, H=Hearts, S=Spades
-                 None or empty string for no card
 
     Returns:
         tuple: (rank, suit) where:
                rank is 0-12 (0=2, 1=3, ..., 12=Ace)
                suit is 0-3 (0=clubs, 1=diamonds, 2=hearts, 3=spades)
-               (-1, -1) for no card
     """
-    if not card_str:
-        return (-1, -1)
-
-    # Handle rank
-    rank_char = card_str[1]
-    if rank_char == 'T':
-        rank = 8  # 10
-    elif rank_char == 'J':
-        rank = 9  # Jack
-    elif rank_char == 'Q':
-        rank = 10  # Queen
-    elif rank_char == 'K':
-        rank = 11  # King
-    elif rank_char == 'A':
-        rank = 12  # Ace
-    else:
-        rank = int(rank_char) - 2  # 2-9
-
-    # Handle suit
-    suit_char = card_str[0]
-    suit_map = {'C': 0, 'D': 1, 'H': 2, 'S': 3}
-    suit = suit_map[suit_char]
-
-    return [rank, suit]
+    suit_str = "CDHS"
+    rank_str = "23456789TJQKA"
+    suit = suit_str.index(card_str[0])
+    rank = rank_str.index(card_str[1])
+    return (rank, suit)
 
 
-class PokerCardEncoder(nn.Module):
-    def __init__(self, d_model=64, nhead=4, num_encoder_layers=2, dim_feedforward=128):
-        """
-        Transformer-based Poker Card Encoder
+# Straight potential calculation
+def calc_straight_potential(ranks):
+    if not ranks:
+        return 0.0
+    # Count consecutive ranks
+    unique_ranks = sorted(set(ranks))
+    max_consecutive = 1
+    current_consecutive = 1
+    for i in range(1, len(unique_ranks)):
+        if unique_ranks[i] == unique_ranks[i-1] + 1:
+            current_consecutive += 1
+            max_consecutive = max(max_consecutive, current_consecutive)
+        else:
+            current_consecutive = 1
+    # Also check for wheel straight (A-2-3-4-5)
+    if 14 in unique_ranks and {2, 3, 4, 5} & set(unique_ranks):
+        wheel_count = 1 + sum(1 for r in [2, 3, 4, 5] if r in unique_ranks)
+        max_consecutive = max(max_consecutive, wheel_count)
+    return min(max_consecutive / 5.0, 1.0)
 
-        Args:
-            d_model: Dimension of the embedding and transformer model
-            nhead: Number of heads in the multi-head attention
-            num_encoder_layers: Number of transformer encoder layers
-            dim_feedforward: Hidden dimension in the feed-forward network
-        """
-        super().__init__()
+# Flush potential calculation
+def calc_flush_potential(suits):
+    if not suits:
+        return 0.0
+    suit_counts = {}
+    for s in suits:
+        suit_counts[s] = suit_counts.get(s, 0) + 1
+    return min(max(suit_counts.values()) / 5.0, 1.0)
 
-        # Constants
-        self.num_suits = 4  # clubs, diamonds, hearts, spades
-        self.num_ranks = 13  # 2-10, J, Q, K, A
-        self.d_model = d_model
+def street_to_num(street):
+    street_map = {'preflop': 0, 'flop': 1, 'turn': 2, 'river': 3}
+    return street_map.get(street, -1)
 
-        # Embeddings for cards
-        self.suit_embedding = nn.Embedding(self.num_suits, d_model // 2)
-        self.rank_embedding = nn.Embedding(self.num_ranks, d_model // 2)
+def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_stack, round_count, is_small_blind):
+    """
+    Encode a poker hand (hole cards + available community cards) into a fixed-length feature vector.
 
-        # Position embedding (7 positions: 2 hole cards + 5 community cards)
-        self.position_embedding = nn.Embedding(7, d_model)
+    Parameters:
+    - hole_cards: List of 2 cards, each represented as (rank, suit)
+    - community_cards: List of 0-5 community cards, each represented as (rank, suit)
+    - street: preflop, flop, turn, river
+    - pot_size: Int
+    - stack
+    - opponent_stack
+    - round_count
+    - is_small_blind (0 or 1)
 
-        # Transformer encoder
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=dim_feedforward,
-            batch_first=True
-        )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layer,
-            num_layers=num_encoder_layers
-        )
+    Returns a list of features each normalized item representing:
+    - high card (hole_cards)
+    - low card (hole_cards)
+    - high suit rank (hole_cards)
+    - low suit rank (hole_cards)
+    - is suited (hole_cards)
+    - is pair (hole_cards)
+    - number of cards available (community_cards)
+    - pairs (0-2) (community_cards)
+    - trips (0-1) (community_cards)
+    - straight potential (community_cards)
+    - flush potential (community_cards)
+    - pairs (0-2) (all_cards)
+    - trips (0-1) (all_cards)
+    - straight potential (all_cards)
+    - flush potential (all_cards)
+    - street (0-3)
+    - stack
+    - opponent_stack
+    - round_count
+    - is_small_blind (0 or 1)
 
-        # Output projection
-        self.out_projection = nn.Linear(d_model, d_model)
+    """
+    hole_cards = list(map(card_to_num, hole_cards))
+    community_cards = list(map(card_to_num, community_cards))
 
-    def forward(self, cards, card_mask=None):
-        """
-        Forward pass
+    # Extract hole cards
+    card1, card2 = hole_cards
+    rank1, suit1 = card1
+    rank2, suit2 = card2
 
-        Args:
-            cards: Tensor of shape [batch_size, 7, 2] where:
-                  - First dimension is batch size
-                  - Second dimension is card position (0,1 for hole cards, 2-6 for community)
-                  - Third dimension is [rank, suit] where:
-                    - rank is 0-12 (0=2, 1=3, ..., 12=Ace)
-                    - suit is 0-3 (0=clubs, 1=diamonds, 2=hearts, 3=spades)
-                    - A value of -1 indicates no card (masked)
-            card_mask: Boolean mask of shape [batch_size, 7] where:
-                      - True means the card is not present
-                      - False means the card is present
+    # Basic hole card features
+    high_card = max(rank1, rank2) / 12  # Normalized high card
+    low_card = min(rank1, rank2) / 12   # Normalized low card
+    high_suit = max(suit1, suit2) / 4  # Normalized high suit
+    low_suit = min(suit1, suit2) / 4   # Normalized low suit
+    suited = 1.0 if suit1 == suit2 else 0.0  # Whether cards are suited
+    pair = 1.0 if rank1 == rank2 else 0.0    # Whether cards are a pair
 
-        Returns:
-            encoded_cards: Tensor of shape [batch_size, 7, d_model]
-        """
-        batch_size, num_cards, _ = cards.shape
+    # Community cards features
+    num_community = len(community_cards) / 5.0  # Normalize number of community cards
 
-        # Extract ranks and suits
-        ranks = cards[:, :, 0]  # [batch_size, 7]
-        suits = cards[:, :, 1]  # [batch_size, 7]
+    # Process community cards
+    community_ranks = [r for r, _ in community_cards]
+    community_suits = [s for _, s in community_cards]
 
-        # Create mask if not provided
-        if card_mask is None:
-            card_mask = (ranks < 0) | (suits < 0)  # [batch_size, 7]
+    # Count rank occurrences in community cards
+    rank_counts_community = {}
+    for rank in community_ranks:
+        rank_counts_community[rank] = rank_counts_community.get(rank, 0) + 1
 
-        # Replace -1 with 0 to avoid embedding errors
-        ranks = torch.clamp(ranks, min=0)
-        suits = torch.clamp(suits, min=0)
+    # Pairs and trips in community cards
+    pairs_community = min(sum(1 for count in rank_counts_community.values() if count == 2), 2) / 2.0
+    trips_community = min(sum(1 for count in rank_counts_community.values() if count >= 3), 1) / 1.0
 
-        # Get embeddings
-        rank_emb = self.rank_embedding(ranks)  # [batch_size, 7, d_model//2]
-        suit_emb = self.suit_embedding(suits)  # [batch_size, 7, d_model//2]
+    # Process all cards
+    all_ranks = [rank1, rank2] + community_ranks
+    all_suits = [suit1, suit2] + community_suits
 
-        # Combine rank and suit embeddings
-        card_emb = torch.cat([rank_emb, suit_emb], dim=-1)  # [batch_size, 7, d_model]
+    # Count rank occurrences in all cards
+    rank_counts_all = {}
+    for rank in all_ranks:
+        rank_counts_all[rank] = rank_counts_all.get(rank, 0) + 1
 
-        # Add position embeddings
-        positions = torch.arange(num_cards).unsqueeze(0).expand(batch_size, -1).to(cards.device)
-        pos_emb = self.position_embedding(positions)  # [batch_size, 7, d_model]
+    # Pairs and trips in all cards
+    pairs_all = min(sum(1 for count in rank_counts_all.values() if count == 2), 2) / 2.0
+    trips_all = min(sum(1 for count in rank_counts_all.values() if count >= 3), 1) / 1.0
 
-        # Combine card and position embeddings
-        x = card_emb + pos_emb  # [batch_size, 7, d_model]
 
-        # Create attention mask for transformer (True means don't attend)
-        attn_mask = card_mask.unsqueeze(1).expand(batch_size, num_cards, num_cards)
-        attn_mask = attn_mask.reshape(batch_size * num_cards, num_cards)
+    # Calculate straight and flush potentials
+    straight_potential_community = calc_straight_potential(community_ranks)
+    flush_potential_community = calc_flush_potential(community_suits)
+    straight_potential_all = calc_straight_potential(all_ranks)
+    flush_potential_all = calc_flush_potential(all_suits)
 
-        # Apply transformer encoder
-        x = x.view(-1, num_cards, self.d_model)  # Ensure correct shape
-        x = self.transformer_encoder(x, src_key_padding_mask=card_mask)
+    # Combine all features
+    features = [
+        # hole cards
+        high_card,
+        low_card,
+        suited,
+        pair,
+        # community
+        num_community,
+        pairs_community,
+        trips_community,
+        straight_potential_community,
+        flush_potential_community,
+        # all
+        pairs_all,
+        trips_all,
+        straight_potential_all,
+        flush_potential_all,
+        # others,
+        street_to_num(street) / 3,
+        stack / 2000,
+        opponent_stack / 2000,
+        round_count / 100,
+        is_small_blind,
+        pot_size / 2000
+    ]
 
-        # Apply output projection
-        encoded_cards = self.out_projection(x)
-
-        return encoded_cards
+    return features

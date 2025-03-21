@@ -3,34 +3,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.distributions import Categorical
-from encoder import PokerCardEncoder
+import math
 
-#Hyperparameters
-learning_rate = 0.01
-gamma         = 0.98
-lmbda         = 0.95
-eps_clip      = 0.1
-K_epoch       = 3
-T_horizon     = 20
-num_actions   = 3
-other_features = 3
+# Hyperparameters for PPO
+learning_rate = 0.0001  # Step size for updating the neural network (higher = faster updates, but may be unstable)
+gamma = 0.99  # Discount factor for future rewards (higher means valuing long-term rewards more)
+lmbda = 0.95  # Smoothing parameter for Generalized Advantage Estimation (GAE), balancing bias and variance
+eps_clip = 0.1  # Clipping range for PPO policy updates (prevents overly large updates for stability)
+K_epoch = 3  # Number of times to update the policy using the same batch of experiences
+T_horizon = 20  # Number of timesteps before collecting a new batch of experiences for training
 
 class PPO(nn.Module):
     def __init__(self, d_model=64):
         super(PPO, self).__init__()
         self.data = []
 
-        # Card encoder using transformer
-        self.card_encoder = PokerCardEncoder(d_model=d_model)
-
-        # Feature size after pooling the card embeddings (we'll use mean pooling)
-        feature_size = d_model
-
-        # Combined feature size
-        combined_size = feature_size + other_features + 1
-
-        self.fc1   = nn.Linear(combined_size,256)
-        self.fc_pi = nn.Linear(256,num_actions)
+        self.fc1   = nn.Linear(19,256)
+        self.fc_pi = nn.Linear(256,3)
         self.fc_v  = nn.Linear(256,1)
         self.optimizer = optim.Adam(self.parameters(), lr=learning_rate)
 
@@ -44,35 +33,6 @@ class PPO(nn.Module):
         x = F.relu(self.fc1(x))
         v = self.fc_v(x)
         return v
-
-    def encode_cards(self, cards, card_mask=None):
-        """
-        Encode the poker cards using the transformer encoder
-
-        Args:
-            cards: Tensor of shape [batch_size, 7, 2]
-            card_mask: Boolean mask of shape [batch_size, 7]
-
-        Returns:
-            encoded_features: Tensor of shape [batch_size, d_model]
-        """
-        # Get card embeddings from transformer [batch_size, 7, d_model]
-        encoded_cards = self.card_encoder(cards, card_mask)
-
-        # Mean pooling across cards (ignoring masked cards)
-        if card_mask is not None:
-            # Create a mask for averaging (1 for valid cards, 0 for masked cards)
-            # Shape: [batch_size, 7, 1]
-            avg_mask = (~card_mask).float().unsqueeze(-1)
-
-            # Apply mask and compute mean
-            # Shape: [batch_size, d_model]
-            encoded_features = (encoded_cards * avg_mask).sum(dim=1) / avg_mask.sum(dim=1)
-        else:
-            # Simple mean if no mask
-            encoded_features = encoded_cards.mean(dim=1)
-
-        return encoded_features
 
     def put_data(self, transition):
         self.data.append(transition)
@@ -104,6 +64,9 @@ class PPO(nn.Module):
         return s, a, r, s_prime, done_mask, prob_a
 
     def train_net(self):
+        if len(self.data) == 0:
+            # print("No data to train on, skipping this training step")
+            return
         s, a, r, s_prime, done_mask, prob_a = self.make_batch()
 
         for i in range(K_epoch):

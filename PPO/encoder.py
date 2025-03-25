@@ -1,6 +1,3 @@
-import torch
-import torch.nn as nn
-
 def card_to_num(card_str):
     """
     Convert a card string (e.g., 'S8', 'HQ') to a tuple of (rank, suit).
@@ -20,7 +17,6 @@ def card_to_num(card_str):
     suit = suit_str.index(card_str[0])
     rank = rank_str.index(card_str[1])
     return (rank, suit)
-
 
 # Straight potential calculation
 def calc_straight_potential(ranks):
@@ -55,7 +51,67 @@ def street_to_num(street):
     street_map = {'preflop': 0, 'flop': 1, 'turn': 2, 'river': 3}
     return street_map.get(street, -1)
 
-def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_stack, round_count, is_small_blind):
+
+def encode_action_histories(action_histories, player_id):
+    # Define streets and initialize features
+    streets = ['preflop', 'flop', 'turn', 'river']
+    features = {}
+    for target in ['player', 'opponent']:
+        for street in streets:
+            features[f'{target}_{street}_aggressive_count'] = 0
+            features[f'{target}_{street}_passive_count'] = 0
+        features[f'{target}_mean_aggressive_count'] = 0
+        features[f'{target}_mean_passive_count'] = 0
+        features[f'{target}_recent_aggressive_count'] = 0
+        features[f'{target}_recent_passive_count'] = 0
+
+    # Process actions and track last street
+    last_street_idx = -1
+    for idx, street in enumerate(streets):
+        if street in action_histories:
+            last_street_idx = idx
+            for action in action_histories[street]:
+                target = 'player' if action['uuid'] == player_id else 'opponent'
+                if action['action'] == 'RAISE':
+                    features[f'{target}_{street}_aggressive_count'] += 1
+                elif action['action'] == 'CALL':
+                    features[f'{target}_{street}_passive_count'] += 1
+
+    # Compute means and recent counts
+    active_streets = last_street_idx + 1 if last_street_idx >= 0 else 1  # Avoid division by 0
+    for target in ['player', 'opponent']:
+        total_aggressive = sum(features[f'{target}_{s}_aggressive_count'] for s in streets)
+        total_passive = sum(features[f'{target}_{s}_passive_count'] for s in streets)
+        features[f'{target}_mean_aggressive_count'] = total_aggressive / active_streets
+        features[f'{target}_mean_passive_count'] = total_passive / active_streets
+        if last_street_idx >= 0:
+            last_street = streets[last_street_idx]
+            features[f'{target}_recent_aggressive_count'] = features[f'{target}_{last_street}_aggressive_count']
+            features[f'{target}_recent_passive_count'] = features[f'{target}_{last_street}_passive_count']
+
+    # Return features as a flat list
+    max_count = 500
+    return [
+        # Player per-street counts
+        features['player_preflop_aggressive_count']/max_count, features['player_preflop_passive_count']/max_count,
+        features['player_flop_aggressive_count']/max_count, features['player_flop_passive_count']/max_count,
+        features['player_turn_aggressive_count']/max_count, features['player_turn_passive_count']/max_count,
+        features['player_river_aggressive_count']/max_count, features['player_river_passive_count']/max_count,
+        # Opponent per-street counts
+        features['opponent_preflop_aggressive_count']/max_count, features['opponent_preflop_passive_count']/max_count,
+        features['opponent_flop_aggressive_count']/max_count, features['opponent_flop_passive_count']/max_count,
+        features['opponent_turn_aggressive_count']/max_count, features['opponent_turn_passive_count']/max_count,
+        features['opponent_river_aggressive_count']/max_count, features['opponent_river_passive_count']/max_count,
+        # Means
+        features['player_mean_aggressive_count'], features['player_mean_passive_count'],
+        features['opponent_mean_aggressive_count'], features['opponent_mean_passive_count'],
+        # Recent
+        features['player_recent_aggressive_count']/max_count, features['player_recent_passive_count']/max_count,
+        features['opponent_recent_aggressive_count']/max_count, features['opponent_recent_passive_count']/max_count
+    ]
+
+
+def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_stack, round_count, is_small_blind, action_histories, player_id):
     """
     Encode a poker hand (hole cards + available community cards) into a fixed-length feature vector.
 
@@ -166,9 +222,9 @@ def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_s
         street_to_num(street) / 3,
         stack / 2000,
         opponent_stack / 2000,
-        round_count / 100,
+        round_count / 500,
         is_small_blind,
-        pot_size / 2000
-    ]
+        pot_size / 2000,
+    ] + encode_action_histories(action_histories, player_id)
 
     return features

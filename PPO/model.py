@@ -24,7 +24,7 @@ class PPO(nn.Module):
         # Set device to CUDA if available or provided device
         self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        self.fc1 = nn.Linear(29, 128)
+        self.fc1 = nn.Linear(31, 128)
         self.fc2 = nn.Linear(128, 128)
         self.fc3 = nn.Linear(128, 128)
         self.fc_pi = nn.Linear(128, 3)

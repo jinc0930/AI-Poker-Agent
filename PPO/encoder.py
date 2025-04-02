@@ -193,10 +193,9 @@ def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_s
     high_card = max(rank1, rank2) / 12  # Normalized high card
     low_card = min(rank1, rank2) / 12   # Normalized low card
 
-    # TODO: use these features
     high_suit = max(suit1, suit2) / 4  # Normalized high suit
     low_suit = min(suit1, suit2) / 4   # Normalized low suit
-    
+
     suited = 1.0 if suit1 == suit2 else 0.0  # Whether cards are suited
     pair = 1.0 if rank1 == rank2 else 0.0    # Whether cards are a pair
 
@@ -246,6 +245,8 @@ def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_s
         low_card,
         suited,
         pair,
+        high_suit,
+        low_suit,
         # community
         num_community,
         pairs_community,

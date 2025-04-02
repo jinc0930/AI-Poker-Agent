@@ -1,168 +1,353 @@
-from pypokerengine.api.game import setup_config, start_poker
-from pypokerengine.players import BasePokerPlayer
-import random as rand
-import numpy as np
-from model import PPO, T_horizon
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.distributions import Categorical
-from torch.utils.tensorboard import SummaryWriter
-from encoder import card_to_num, encode
 import os
+import random
+import secrets
+import shutil
+import threading
+import time
+from dataclasses import dataclass
+from typing import Callable, List
+import uuid
+import torch
+from utils import AITrainer, BluffPlayer, CallPlayer, RandomPlayer, is_winner, run_game
+from model import Hyperparams
+from torch.utils.tensorboard import SummaryWriter
+from pypokerengine.players import BasePokerPlayer
+from typing import Optional
 
-class FishPlayer(BasePokerPlayer):
-    def declare_action(self, valid_actions, hole_card, round_state):
-        # valid_actions format => [FOLD, CALL, RAISE]
-        call_action_info = valid_actions[1]
-        action, amount = call_action_info["action"], call_action_info["amount"]
-        return action, amount   # action returned here is sent to the poker engine
 
-    def receive_game_start_message(self, game_info):
-        pass
+@dataclass
+class Agent:
+    name: str
+    display_name: Optional[str] = None
+    load: Optional[Callable[[], BasePokerPlayer]] = None
+    wins: int = 0
+    games: int = 0
+    steps: int = 0
+    hands: int = 0
+    net_profit: int = 0
+    folds: int = 0
+    raises: int = 0
+    calls: int = 0
+    rewards: int = 0
+    rewards_from_folding: int = 0
+    is_model: bool = False
+    is_frozen: bool = False
+    is_adversarial: bool = False
+    rank: int = 0
+    hyperparams: Optional[Hyperparams] = None
+    hot_filepath: Optional[str] = None
 
-    def receive_round_start_message(self, round_count, hole_card, seats):
-        pass
+    def get_bb100(self):
+        if self.hands <= 0: return 0
+        return (self.net_profit/20/self.hands)*100
 
-    def receive_street_start_message(self, street, round_state):
-        pass
+    def move_to_hot(self, from_path: str):
+        assert from_path is not None
+        if self.is_model and self.hot_filepath is None:
+            if not os.path.exists('hot_models'):
+                os.makedirs('hot_models')
+            self.hot_filepath = f"./hot_models/{self.name}.pt"
+            try:
+                shutil.copy(from_path, self.hot_filepath)
+            except shutil.SameFileError:
+                pass
+        return self
 
-    def receive_game_update_message(self, action, round_state):
-        pass
-
-    def receive_round_result_message(self, winners, hand_info, round_state):
-        pass
-
-class RandomPlayer(BasePokerPlayer):
-    def declare_action(self, valid_actions, hole_card, round_state):
-        # valid_actions format => [FOLD, CALL, RAISE]
-        r = rand.random()
-        if r < 0.33:
-            action, amount = valid_actions[0]["action"], valid_actions[0]["amount"]
-        elif r < 0.66:
-            action, amount = valid_actions[1]["action"], valid_actions[1]["amount"]
+    def get_player(self):
+        if self.is_model:
+            if self.is_frozen:
+                player = AITrainer(filename=self.hot_filepath, hyperparams=self.hyperparams)
+                player.disable_training = True
+                return player
+            return AITrainer(filename=self.hot_filepath, hyperparams=self.hyperparams)
         else:
-            action, amount = valid_actions[2]["action"], valid_actions[2]["amount"]["min"] + 10
-        return action, amount
+            return self.load()
 
-    def receive_game_start_message(self, game_info):
-        pass
+    def save(self, loaded = None):
+        if self.is_model:
+            if not os.path.exists('hot_models'):
+                os.makedirs('hot_models')
+            if self.hot_filepath is None:
+                self.hot_filepath = f"./hot_models/{self.name}.pt"
+            if loaded is None:
+                loaded = self.get_player()
+            loaded.model.save(filename = self.hot_filepath)
 
-    def receive_round_start_message(self, round_count, hole_card, seats):
-        pass
+    def copy_to(self, filepath: str):
+        if self.is_model:
+            try:
+                shutil.copy(self.hot_filepath, filepath)
+            except shutil.SameFileError:
+                pass
 
-    def receive_street_start_message(self, street, round_state):
-        pass
+    def clone(self):
+        display_name = f"{'Frozen' if not self.name.startswith('Frozen') else ''}{self.name.split('_')[0]}_{self.steps}"
+        cloned = Agent(
+                name = f"{uuid.uuid4()}",
+                display_name = display_name,
+                is_frozen = True,
+                is_model = self.is_model,
+                hyperparams = self.hyperparams,
+                wins=self.wins,
+                games=self.games,
+                steps=self.steps,
+                hands=self.hands,
+                net_profit=self.net_profit,
+                load=self.load
+            ).move_to_hot(self.hot_filepath)
+        return cloned
 
-    def receive_game_update_message(self, action, round_state):
-        pass
+    def get_display_name(self):
+        return self.display_name if self.display_name is not None else self.name
 
-    def receive_round_result_message(self, winners, hand_info, round_state):
-        pass
+    def delete(self):
+        if self.is_model and self.hot_filepath is not None:
+            try:
+                os.unlink(self.hot_filepath)
+            except:
+                print("Error deleting file: " + self.hot_filepath)
 
-def get_stacks(seats, your_uuid):
-    your_stack = next(s['stack'] for s in seats if s['uuid'] == your_uuid)
-    opponent_stack = next(s['stack'] for s in seats if s['uuid'] != your_uuid)
-    return your_stack, opponent_stack
+def choose_opponent(current_agent, agents):
+    opponents = [p for p in agents if p.name != current_agent.name]
+    return secrets.choice(opponents)
 
-class AITrainer(BasePokerPlayer):
-    def declare_action(self, valid_actions, hole_card, round_state):
-        my_stack, opponent_stack = get_stacks(round_state["seats"], self.uuid)
-        state_prime = encode(
-            hole_cards=hole_card,
-            community_cards=round_state["community_card"],
-            street=round_state["street"],
-            pot_size=round_state["pot"]["main"]["amount"],
-            stack=my_stack,
-            opponent_stack=opponent_stack,
-            round_count=round_state["round_count"],
-            is_small_blind=int(any(action['action'] == 'SMALLBLIND' and action['uuid'] == self.uuid for action in round_state['action_histories'].get('preflop', [])))
-        )
+def choose_strong_opponent(current_agent, agents):
+    weights = [0.5 ** i for i in range(len(agents))]
+    return random.choices(agents, weights=weights, k=1)[0]
 
-        if not hasattr(self, 'state'):
-            self.state = state_prime
+def choose_least_games_opponent(current_agent, agents):
+    games_played = [agent.games for agent in agents]
+    max_games = max(games_played)
+    weights = [max_games - games + 1 for games in games_played]
+    return random.choices(agents, weights=weights, k=1)[0]
 
-        prob = self.model.pi(torch.tensor(self.state, dtype=torch.float))
-        action = Categorical(prob).sample().item()
-        reward = 0
-        self.model.put_data((self.state, action, reward, state_prime, prob[action].item(), False))
-        self.state = state_prime
-        self.actions += 1
+class Trainer():
+    def __init__(
+        self,
+        iterations=1_000_000,
+        snapshot_steps=500,
+        replicate_window=64,
+        replicate_rank=2,
+        stats_decay=0.95,
+        log_dir='logs/arena_' + str(int(time.time())),
+        league_size = 16,
+        snapshot_dir = 'league',
+        load_snapshot = True,
+        start_replicate_after = 10_000,
+        main_agents: List[Agent] = [],
+        frozen_agents: List[Agent] = [],
+        replicate_bb100 = 10,
+    ) -> None:
+        self.next_agent = 0
+        self.global_steps = 0
+        self.lock = threading.Lock()
+        self.log_dir = log_dir
+        self.snapshot_dir = snapshot_dir
+        self.writer = SummaryWriter(log_dir=self.log_dir)
+        self.load_snapshot = load_snapshot
+        self.iterations = iterations
+        self.snapshot_steps = snapshot_steps
+        self.replicate_window = replicate_window
+        self.replicate_rank = replicate_rank
+        self.start_replicate_after = start_replicate_after
+        self.league_size = league_size
+        self.main_agents = main_agents
+        self.frozen_agents = frozen_agents
+        self.stats_decay = stats_decay
+        self.replicate_bb100 = replicate_bb100
+        self.load_agents()
+    def load_agents(self):
+        if not os.path.exists(self.snapshot_dir):
+            os.makedirs(self.snapshot_dir)
+        filenames = os.listdir(self.snapshot_dir)
+        filenames.sort(reverse=True, key=str.lower)
+        if self.load_snapshot and len(filenames) > 0:
+            for filename in filenames:
+                start, end = filename.rfind('_'), filename.rfind('.')
+                steps = filename[start+1:end]
+                if not steps.isdigit(): continue
+                is_frozen = filename.startswith('Frozen');
+                if is_frozen and len(self.frozen_agents) >= self.league_size: continue
+                pool = self.frozen_agents if is_frozen else self.main_agents
+                pool.append(Agent(
+                    name = filename.split('.')[0],
+                    is_model = True,
+                    is_frozen = is_frozen,
+                    hyperparams = Hyperparams(),
+                    steps = int(steps),
+                ).move_to_hot(f"./{self.snapshot_dir}/{filename}"))
 
-        # valid_actions format => [raise_action_info, call_action_info, fold_action_info]
-        final = valid_actions[action]
-        if action == 2:
-            return final["action"], final["amount"]["min"] + 10
-        return final["action"], final["amount"]
+    def print_rank(self):
+        all_sorted = sorted(self.main_agents + self.frozen_agents, key=lambda x: x.get_bb100(), reverse=True)
+        print("\nRANK:")
+        for i, a_agent in enumerate(all_sorted):
+            a_agent.rank = i
+            print(f"{a_agent.get_display_name():<30} {int(a_agent.get_bb100()):<3}")
 
-    def receive_game_start_message(self, game_info):
-        if not hasattr(self, 'model'):
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.model = PPO()
-        self.actions = 0
+    def benchmark(self):
+        agent = self.main_agents[0]
+        p = agent.get_player()
+        p.disable_training = True
+        with torch.no_grad():
+            game_result = run_game(
+                p,
+                agent.name,
+                Agent('CallPlayer', load = lambda: CallPlayer(), is_frozen = True ),
+                'CallPlayer')
+        is_win, chips, opponent_chips = is_winner(game_result, agent.name)
+        print('Against CallPlayer: ', chips - 1000)
 
-    def receive_round_start_message(self, round_count, hole_card, seats):
-        pass
+    def train(self):
 
-    def receive_street_start_message(self, street, round_state):
-        pass
+        print('training', self.main_agents)
+        print('frozen', self.frozen_agents)
 
-    def receive_game_update_message(self, action, round_state):
-        pass
+        assert self.main_agents
+        assert self.frozen_agents
 
-    def receive_round_result_message(self, winners, hand_info, round_state):
-        if winners[0]['uuid'] == self.uuid:
-            self.model.reward(round_state['pot']['main']['amount'] / 2000)
-        else:
-            self.model.reward(round_state['pot']['main']['amount'] / -2000)
-        if (self.actions % T_horizon) == 0:
-            self.model.train_net()
-        pass
+        while True:
+            # match making
+            if (self.global_steps >= self.iterations or not self.main_agents): break
+            agent = self.main_agents[self.next_agent]
+            self.next_agent = (self.next_agent + 1) % len(self.main_agents)
+            opponent = choose_strong_opponent(agent, self.frozen_agents) if agent.steps % 2 == 0 else choose_least_games_opponent(agent, self.frozen_agents)
+            if opponent is None: break
+            p1, p2 = agent.get_player(), opponent.get_player()
 
-def run_game(player1, name1, player2, name2, verbose = 0):
-    config = setup_config(max_round=100, initial_stack=1000, small_blind_amount=10)
-    config.register_player(name=name1, algorithm=player1)
-    config.register_player(name=name2, algorithm=player2)
-    return start_poker(config, verbose=verbose)
+            # play
+            game_result = run_game(p1, agent.name, p2, opponent.name, first=agent.steps % 2 == 0)
+            is_win, chips, opponent_chips = is_winner(game_result, agent.name)
+
+            # post play
+            agent.steps += 1
+            agent.wins = agent.wins * self.stats_decay
+            if is_win: agent.wins += 1
+            agent.games = agent.games * self.stats_decay + 1
+            agent.net_profit = agent.net_profit * self.stats_decay + (chips - 1000)
+            agent.hands = agent.hands * self.stats_decay + p1.hands
+            agent.folds = agent.folds * self.stats_decay + p1.folds
+            agent.raises = agent.raises * self.stats_decay + p1.raises
+            agent.calls = agent.calls * self.stats_decay + p1.calls
+            if agent.is_model:
+                # reward the ratio of folds to encourage folds even against weak/tight opponents
+                p1.done_with_reward(1 if is_win else -1)
+                #p1.done_with_reward(agent.folds/agent.hands if is_win else -1)
+                #p1.done_with_reward((chips - 1000)/1000)
+            agent.rewards = agent.rewards * self.stats_decay + p1.rewards
+            agent.rewards_from_folding = agent.rewards_from_folding * self.stats_decay + p1.rewards_from_folding
+
+
+            if opponent.is_frozen:
+                opponent.hands = opponent.hands * self.stats_decay + p2.hands
+                opponent.games = opponent.games * self.stats_decay + 1
+                opponent.net_profit = opponent.net_profit * self.stats_decay + (opponent_chips - 1000)
+                if not is_win: opponent.wins += 1
+
+            if agent.is_model and not agent.is_frozen:
+                # metrics
+                self.writer.add_scalar(agent.name + '/BB/100', agent.get_bb100(), agent.steps)
+                self.writer.add_scalar(agent.name + '/Chips', chips, agent.steps)
+                self.writer.add_scalar(agent.name + '/WinRate', agent.wins/(agent.games + 1), agent.steps)
+                self.writer.add_scalar(agent.name + '/FoldRate', agent.folds/(agent.hands + 1), agent.steps)
+                self.writer.add_scalar(agent.name + '/CallRate', agent.calls/(agent.hands + 1), agent.steps)
+                self.writer.add_scalar(agent.name + '/RaiseRate', agent.raises/(agent.hands + 1), agent.steps)
+                self.writer.add_scalar(agent.name + '/RewardRate', agent.rewards/(agent.games + 1), agent.steps)
+                # self.writer.add_scalar(agent.name + '/FoldRewardRate', agent.rewards_from_folding/(agent.games + 1), agent.steps)
+
+            # Save after training
+            agent.save(p1)
+
+            # Replicate new agents when top N = replicate_rank
+            if agent.is_model and agent.steps > self.start_replicate_after and \
+             (agent.steps % self.replicate_window == 0 and\
+              agent.rank <= self.replicate_rank and\
+              agent.get_bb100() > self.replicate_bb100):
+                cloned_agent = agent.clone()
+                cloned_agent.games = 0
+                cloned_agent.wins = 0
+
+                self.frozen_agents.append(cloned_agent)
+                # print(f'replicated {agent.name} to {cloned_agent.display_name()}')
+
+            # Global updates
+            if self.global_steps % 1000 == 0:
+                self.print_rank()
+                #self.benchmark()
+
+            if self.global_steps > 0 and self.global_steps % self.snapshot_steps == 0:
+                print(f"\nIteration {self.global_steps}/{self.iterations}")
+
+                # Update/trim league
+                self.frozen_agents = sorted(self.frozen_agents, key=lambda x: x.get_bb100(), reverse=True)
+                cut = max(0, self.league_size - len(self.main_agents))
+                to_be_removed = self.frozen_agents[cut:]
+                keep_agents = self.frozen_agents[:cut]
+                self.frozen_agents = sorted(keep_agents, key=lambda x: x.get_bb100(), reverse=True)
+                for a_agent in to_be_removed:
+                    if a_agent.games > 3 or a_agent.get_bb100() < 0:
+                        a_agent.delete()
+                    else:
+                        keep_agents.append(a_agent)
+                self.frozen_agents = keep_agents
+
+                # Snapshot the league
+                if not os.path.exists(self.snapshot_dir):
+                    os.makedirs(self.snapshot_dir)
+                else:
+                    for filename in os.listdir(self.snapshot_dir):
+                        file_path = os.path.join(self.snapshot_dir, filename)
+                        try:
+                            if os.path.isfile(file_path) or os.path.islink(file_path):
+                                os.unlink(file_path) # Delete file or link
+                            elif os.path.isdir(file_path):
+                                shutil.rmtree(file_path) # Delete subdirectory
+                        except Exception as e:
+                            print(f"failed to delete {file_path}: {e}")
+                for a_agent in self.main_agents:
+                    if a_agent.is_model:
+                        a_agent.copy_to(f"./{self.snapshot_dir}/{a_agent.get_display_name().split('_')[0]}_{a_agent.steps}.pt")
+                for a_agent in self.frozen_agents:
+                    if a_agent.is_model:
+                        a_agent.copy_to(f"./{self.snapshot_dir}/{a_agent.get_display_name().split('_')[0]}_{a_agent.steps}.pt")
+
+                print(f'league snapshot taken at ./{self.snapshot_dir}\n')
+            self.global_steps += 1
+
+        self.writer.close()
+        return self.main_agents
 
 if __name__ == '__main__':
-    # Initialize TensorBoard writer
-    writer = SummaryWriter(log_dir='PPO/runs/nowyes_150k')
+    # Main agents
+    main_agents = [
+        Agent(
+            name = 'Star5',
+            is_model = True,
+            hyperparams = Hyperparams(),
+        ),
+    ]
 
-    def determine_winner(game_data):
-        players = game_data['players']
-        winner = max(players, key=lambda player: player['stack'])
-        return winner['name']
+    # Frozen agents
+    frozen_agents = [
+        Agent('CallPlayer', load = lambda: CallPlayer(), is_frozen = True ),
+        Agent('BluffPlayer', load = lambda: BluffPlayer(), is_frozen = True ),
+    ]
 
-    stack = 0
-    wins = 0
-    iterations = 10000
+    for fold, raisee in [(0.001, 0)]:
+        a = RandomPlayer()
+        a.set_action_ratio(fold, raisee, 1 - (fold + raisee))
+        frozen_agents.append(Agent(f'RandomPlayer{fold}-{raisee}', load = lambda: RandomPlayer(), is_frozen = True ))
 
-    ai = AITrainer()
-    opponent = FishPlayer()
-
-    for i in range(iterations):
-        toggle = i % 2 == 0
-        player1 = ai if toggle else opponent
-        player2 = opponent if toggle else ai
-        name1 = 'AIPlayer' if toggle else 'RandomPlayer'
-        name2 = 'RandomPlayer' if toggle else 'AIPlayer'
-        game_result = run_game(player1, name1, player2, name2)
-
-        # Process current game
-        players = game_result['players']
-        winner = max(players, key=lambda player: player['stack'])
-        ai_stack = next(player['stack'] for player in players if player['name'] == 'AIPlayer')
-
-        stack += ai_stack
-        if winner['name'] == 'AIPlayer':
-            wins += 1
-
-        writer.add_scalar('AIPlayer/Stack', ai_stack, i)
-        writer.add_scalar('AIPlayer/Cumulative_Stack', stack, i)
-        writer.add_scalar('AIPlayer/Wins', wins, i)
-        writer.add_scalar('AIPlayer/Win_Rate', wins/(i + 1), i)
-
-    # Close the writer
-    writer.close()
+    # If load_snapshot is True you might not want to use frozen and main_agents
+    Trainer(
+        iterations=1_000_000,
+        snapshot_steps=1000,
+        replicate_window=1024,
+        replicate_rank=0, # top 1
+        log_dir='logs/arena_' + str(int(time.time())),
+        league_size = 64,
+        snapshot_dir = 'star5',
+        load_snapshot = True,
+        start_replicate_after = 1000,
+        main_agents=main_agents,
+        frozen_agents=frozen_agents
+    ).train()

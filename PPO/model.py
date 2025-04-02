@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.distributions import Categorical
 from dataclasses import dataclass
 import os
 
@@ -12,8 +11,9 @@ class Hyperparams:
     gamma: float = 0.99 # long-term strategic planning
     lmbda: float = 0.95
     eps_clip: float = 0.2 # Allows more policy exploration
-    K_epoch: int = 10
+    K_epoch: int = 3
     T_horizon: int = 100
+    entropy_coeff: float = 0.01
 
 class PPO(nn.Module):
     def __init__(self, filename=None, device=None, hyperparams: Hyperparams = Hyperparams()):
@@ -24,24 +24,39 @@ class PPO(nn.Module):
         # Set device to CUDA if available or provided device
         self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        self.fc1 = nn.Linear(43, 128)
+        self.fc1 = nn.Linear(29, 128)
         self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, 128)
         self.fc_pi = nn.Linear(128, 3)
         self.fc_v = nn.Linear(128, 1)
         self.optimizer = optim.Adam(self.parameters(), lr=hyperparams.learning_rate)
 
-        # Move model to device
-        self.to(self.device)
+        # Orthogonal initialization
+        nn.init.orthogonal_(self.fc1.weight, gain=nn.init.calculate_gain('relu'))
+        nn.init.orthogonal_(self.fc2.weight, gain=nn.init.calculate_gain('relu'))
+        nn.init.orthogonal_(self.fc3.weight, gain=nn.init.calculate_gain('relu'))
+        nn.init.orthogonal_(self.fc_pi.weight, gain=1.0)
+
+        # Zero bias initialization (optional but common)
+        nn.init.zeros_(self.fc1.bias)
+        nn.init.zeros_(self.fc2.bias)
+        nn.init.zeros_(self.fc3.bias)
+        nn.init.zeros_(self.fc_pi.bias)
+
         if filename is not None:
-            self.load(filename)
             self.filename = filename
+            self.load(filename)
         else:
             self.filename = None
+
+        # Move model to device
+        self.to(self.device)
 
     def pi(self, x, softmax_dim=0):
         x = x.to(self.device)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
         x = self.fc_pi(x)
         prob = F.softmax(x, dim=softmax_dim)
         return prob
@@ -50,6 +65,7 @@ class PPO(nn.Module):
         x = x.to(self.device)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
         v = self.fc_v(x)
         return v
 
@@ -61,6 +77,13 @@ class PPO(nn.Module):
             x = self.data[-1]
             y = list(x)
             y[2] = r
+            self.data[-1] = tuple(y)
+
+    def done(self):
+        if len(self.data) > 0:
+            x = self.data[-1]
+            y = list(x)
+            y[5] = True
             self.data[-1] = tuple(y)
 
     def make_batch(self):
@@ -112,13 +135,17 @@ class PPO(nn.Module):
             ratio = torch.exp(torch.log(pi_a) - torch.log(prob_a))  # a/b == exp(log(a)-log(b))
 
             surr1 = ratio * advantage
-            surr2 = torch.clamp(ratio, 1-self.hyperparams.eps_clip, 1+self.hyperparams.eps_clip) * advantage
-            loss = -torch.min(surr1, surr2) + F.smooth_l1_loss(self.v(s), td_target.detach())
+            surr2 = torch.clamp(ratio, 1 - self.hyperparams.eps_clip, 1 + self.hyperparams.eps_clip) * advantage
+
+            # Compute policy entropy
+            policy_entropy = -(pi * torch.log(pi + 1e-10)).sum(dim=1)  # Add small constant to avoid log(0)
+
+            # Add entropy bonus to the loss (negative because we maximize entropy)
+            loss = -torch.min(surr1, surr2) + F.smooth_l1_loss(self.v(s), td_target.detach()) - self.hyperparams.entropy_coeff * policy_entropy
 
             self.optimizer.zero_grad()
             loss.mean().backward()
             self.optimizer.step()
-
     def save(self, filename = None):
         """Save the model parameters and optimizer state"""
         state = {
@@ -132,16 +159,29 @@ class PPO(nn.Module):
     def load(self, filename):
         """Load the model parameters and optimizer state"""
         if os.path.isfile(filename):
-            checkpoint = torch.load(filename, map_location=self.device)
-            self.load_state_dict(checkpoint['model_state_dict'])
-            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            # print(f"Model loaded from {filename}")
+            checkpoint = torch.load(filename, map_location=self.device)  # Ensure loading to the correct device
 
-            # Fix optimizer device if needed
+            # Move model to the correct device
+            self.load_state_dict(checkpoint['model_state_dict'])
+            self.to(self.device)  # Ensure the model is on the right device
+
+            # Move optimizer state to the correct device
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+            # Move optimizer state tensors to the correct device
             for state in self.optimizer.state.values():
                 for k, v in state.items():
                     if isinstance(v, torch.Tensor):
                         state[k] = v.to(self.device)
         else:
-            # print(f"No model found at {filename}")
-            pass
+            print(f"No model found at {filename}")
+    def save_full(self, filename: str):
+        """Save the entire model (architecture + parameters)"""
+        torch.save(self)
+        return filename
+
+    def load_full(filename):
+        """Load the entire model"""
+        model = torch.load(filename)
+        model.eval()
+        return model

@@ -1,21 +1,25 @@
+import math
+
 def card_to_num(card_str):
     """
-    Convert a card string (e.g., 'S8', 'HQ') to a tuple of (rank, suit).
+    Convert a card string to a tuple of (rank, suit)
 
-    Args:
-        card_str: String representation of a card
-                 T=10, J=Jack, Q=Queen, K=King, A=Ace
-                 C=Clubs, D=Diamonds, H=Hearts, S=Spades
-
-    Returns:
-        tuple: (rank, suit) where:
-               rank is 0-12 (0=2, 1=3, ..., 12=Ace)
-               suit is 0-3 (0=clubs, 1=diamonds, 2=hearts, 3=spades)
+    :param card_str: Card string in format like 'H10', 'CA', 'D7', etc.
+    :return: Tuple with (rank_index, suit_index)
     """
     suit_str = "CDHS"
     rank_str = "23456789TJQKA"
-    suit = suit_str.index(card_str[0])
-    rank = rank_str.index(card_str[1])
+
+    # Handle two-character and three-character card strings
+    if len(card_str) == 2:
+        suit = suit_str.index(card_str[0])
+        rank = rank_str.index(card_str[1])
+    elif len(card_str) == 3:
+        suit = suit_str.index(card_str[0])
+        rank = int(card_str[1:])
+    else:
+        raise ValueError(f"Invalid card string: {card_str}")
+
     return (rank, suit)
 
 # Straight potential calculation
@@ -51,103 +55,132 @@ def street_to_num(street):
     street_map = {'preflop': 0, 'flop': 1, 'turn': 2, 'river': 3}
     return street_map.get(street, -1)
 
+def get_last_opponent_action(action_histories, my_uuid):
+    for street in reversed(['preflop', 'flop', 'turn', 'river']):
+        round_actions = action_histories.get(street, [])
+        for action in reversed(round_actions):
+            if action['uuid'] != my_uuid:
+                return action, street
 
-def encode_action_histories(action_histories, player_id):
-    # Define streets and initialize features
+    return None, None
+
+def calculate_bets(action_histories, my_uuid):
+    my_bet = 0
+    opponent_bet = 0
     streets = ['preflop', 'flop', 'turn', 'river']
-    features = {}
-    for target in ['player', 'opponent']:
-        for street in streets:
-            features[f'{target}_{street}_aggressive_count'] = 0
-            features[f'{target}_{street}_passive_count'] = 0
-        features[f'{target}_mean_aggressive_count'] = 0
-        features[f'{target}_mean_passive_count'] = 0
-        features[f'{target}_recent_aggressive_count'] = 0
-        features[f'{target}_recent_passive_count'] = 0
 
-    # Process actions and track last street
-    last_street_idx = -1
-    for idx, street in enumerate(streets):
-        if street in action_histories:
-            last_street_idx = idx
-            for action in action_histories[street]:
+    for street in streets:
+        if street not in action_histories:
+            continue
+
+        for action in action_histories[street]:
+            if 'paid' in action:
+                uuid = action['uuid']
+                amount_paid = action['paid']
+                if uuid == my_uuid:
+                    my_bet += amount_paid
+                else:
+                    opponent_bet += amount_paid
+            elif 'amount' in action and (action['action'] == 'SMALLBLIND' or action['action'] == 'BIGBLIND'):
+                uuid = action['uuid']
+                amount = action['amount']
+                if uuid == my_uuid:
+                    my_bet += amount
+                else:
+                    opponent_bet += amount
+    return my_bet, opponent_bet
+
+def log_normalize(x, x_max):
+    return math.log1p(x) / math.log1p(x_max)
+
+
+def encode_action_histories(all_action_histories, player_id, window_size=5):
+    streets = ['preflop', 'flop', 'turn', 'river']
+    features = []
+
+    # Long-term stats
+    player_raises, player_calls = 0, 0
+    opp_raises, opp_calls = 0, 0
+
+    # Recent stats (last window_size hands)
+    recent_opp_raises = 0
+
+    for i, action_histories in enumerate(all_action_histories):
+        for street, street_actions in action_histories.items():
+            if street not in streets:
+                continue
+            for action in street_actions:
                 target = 'player' if action['uuid'] == player_id else 'opponent'
-                if action['action'] == 'RAISE':
-                    features[f'{target}_{street}_aggressive_count'] += 1
-                elif action['action'] == 'CALL':
-                    features[f'{target}_{street}_passive_count'] += 1
+                action_type = action['action']
 
-    # Compute means and recent counts
-    active_streets = last_street_idx + 1 if last_street_idx >= 0 else 1  # Avoid division by 0
-    for target in ['player', 'opponent']:
-        total_aggressive = sum(features[f'{target}_{s}_aggressive_count'] for s in streets)
-        total_passive = sum(features[f'{target}_{s}_passive_count'] for s in streets)
-        features[f'{target}_mean_aggressive_count'] = total_aggressive / active_streets
-        features[f'{target}_mean_passive_count'] = total_passive / active_streets
-        if last_street_idx >= 0:
-            last_street = streets[last_street_idx]
-            features[f'{target}_recent_aggressive_count'] = features[f'{target}_{last_street}_aggressive_count']
-            features[f'{target}_recent_passive_count'] = features[f'{target}_{last_street}_passive_count']
+                if action_type == 'RAISE':
+                    if target == 'player':
+                        player_raises += 1
+                    else:
+                        opp_raises += 1
+                        if i >= len(all_action_histories) - window_size:
+                            recent_opp_raises += 1
+                elif action_type == 'CALL':
+                    if target == 'player':
+                        player_calls += 1
+                    else:
+                        opp_calls += 1
 
-    # Return features as a flat list
-    max_count = 500
-    return [
-        # Player per-street counts
-        features['player_preflop_aggressive_count']/max_count, features['player_preflop_passive_count']/max_count,
-        features['player_flop_aggressive_count']/max_count, features['player_flop_passive_count']/max_count,
-        features['player_turn_aggressive_count']/max_count, features['player_turn_passive_count']/max_count,
-        features['player_river_aggressive_count']/max_count, features['player_river_passive_count']/max_count,
-        # Opponent per-street counts
-        features['opponent_preflop_aggressive_count']/max_count, features['opponent_preflop_passive_count']/max_count,
-        features['opponent_flop_aggressive_count']/max_count, features['opponent_flop_passive_count']/max_count,
-        features['opponent_turn_aggressive_count']/max_count, features['opponent_turn_passive_count']/max_count,
-        features['opponent_river_aggressive_count']/max_count, features['opponent_river_passive_count']/max_count,
-        # Means
-        features['player_mean_aggressive_count'], features['player_mean_passive_count'],
-        features['opponent_mean_aggressive_count'], features['opponent_mean_passive_count'],
-        # Recent
-        features['player_recent_aggressive_count']/max_count, features['player_recent_passive_count']/max_count,
-        features['opponent_recent_aggressive_count']/max_count, features['opponent_recent_passive_count']/max_count
-    ]
+    # Compute features
+    player_total = player_raises + player_calls
+    opp_total = opp_raises + opp_calls
+    features.append(player_raises / player_total if player_total > 0 else 0)  # Player aggression
+    features.append(opp_raises / opp_total if opp_total > 0 else 0)  # Opponent aggression
+    features.append(math.tanh(recent_opp_raises / window_size))  # Recent opponent raises
+
+    return features
 
 
-def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_stack, round_count, is_small_blind, action_histories, player_id):
-    """
-    Encode a poker hand (hole cards + available community cards) into a fixed-length feature vector.
+def encode_action_histories_v2(all_action_histories, player_id, window_size=5):
+    streets = ['preflop', 'flop', 'turn', 'river']
+    features = []
 
-    Parameters:
-    - hole_cards: List of 2 cards, each represented as (rank, suit)
-    - community_cards: List of 0-5 community cards, each represented as (rank, suit)
-    - street: preflop, flop, turn, river
-    - pot_size: Int
-    - stack
-    - opponent_stack
-    - round_count
-    - is_small_blind (0 or 1)
+    # Compute per-street raise frequencies
+    for street in streets:
+        # Player stats for this street
+        player_raises = sum(
+            1 for hist in all_action_histories
+            for action in hist.get(street, [])
+            if action['uuid'] == player_id and action['action'] == 'RAISE'
+        )
+        player_actions = sum(
+            1 for hist in all_action_histories
+            for action in hist.get(street, [])
+            if action['uuid'] == player_id
+        )
+        features.append(player_raises / player_actions if player_actions > 0 else 0)
 
-    Returns a list of features each normalized item representing:
-    - high card (hole_cards)
-    - low card (hole_cards)
-    - high suit rank (hole_cards)
-    - low suit rank (hole_cards)
-    - is suited (hole_cards)
-    - is pair (hole_cards)
-    - number of cards available (community_cards)
-    - pairs (0-2) (community_cards)
-    - trips (0-1) (community_cards)
-    - straight potential (community_cards)
-    - flush potential (community_cards)
-    - pairs (0-2) (all_cards)
-    - trips (0-1) (all_cards)
-    - straight potential (all_cards)
-    - flush potential (all_cards)
-    - street (0-3)
-    - stack
-    - opponent_stack
-    - round_count
-    - is_small_blind (0 or 1)
+        # Opponent stats for this street
+        opp_raises = sum(
+            1 for hist in all_action_histories
+            for action in hist.get(street, [])
+            if action['uuid'] != player_id and action['action'] == 'RAISE'
+        )
+        opp_actions = sum(
+            1 for hist in all_action_histories
+            for action in hist.get(street, [])
+            if action['uuid'] != player_id
+        )
+        features.append(opp_raises / opp_actions if opp_actions > 0 else 0)
 
-    """
+    # Recent opponent raises (across all streets, last window_size hands)
+    recent_opp_raises = sum(
+        1 for hist in all_action_histories[-window_size:]
+        for street in streets
+        for action in hist.get(street, [])
+        if action['uuid'] != player_id and action['action'] == 'RAISE'
+    )
+    features.append(math.tanh(recent_opp_raises / window_size))
+
+    return features
+
+
+def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_stack, round_count, is_small_blind, all_action_histories, player_id):
     hole_cards = list(map(card_to_num, hole_cards))
     community_cards = list(map(card_to_num, community_cards))
 
@@ -159,8 +192,11 @@ def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_s
     # Basic hole card features
     high_card = max(rank1, rank2) / 12  # Normalized high card
     low_card = min(rank1, rank2) / 12   # Normalized low card
+
+    # TODO: use these features
     high_suit = max(suit1, suit2) / 4  # Normalized high suit
     low_suit = min(suit1, suit2) / 4   # Normalized low suit
+    
     suited = 1.0 if suit1 == suit2 else 0.0  # Whether cards are suited
     pair = 1.0 if rank1 == rank2 else 0.0    # Whether cards are a pair
 
@@ -200,6 +236,9 @@ def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_s
     straight_potential_all = calc_straight_potential(all_ranks)
     flush_potential_all = calc_flush_potential(all_suits)
 
+    # Bettings
+    my_bet, opponent_bet = calculate_bets(action_histories=all_action_histories[-1], my_uuid=player_id)
+
     # Combine all features
     features = [
         # hole cards
@@ -220,11 +259,12 @@ def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_s
         flush_potential_all,
         # others,
         street_to_num(street) / 3,
-        stack / 2000,
-        opponent_stack / 2000,
+        stack / 1000,
+        opponent_stack / 1000,
         round_count / 500,
         is_small_blind,
-        pot_size / 2000,
-    ] + encode_action_histories(action_histories, player_id)
+        my_bet / 1990,
+        opponent_bet / 1990,
+    ] + encode_action_histories_v2(all_action_histories, player_id)
 
     return features

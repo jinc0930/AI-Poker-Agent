@@ -1,13 +1,59 @@
-from model import Hyperparams, PPO
-from encoder import calculate_bets, encode
+from phevaluator import evaluate_cards
+import random
+from typing import List
+import numpy as np
 from pypokerengine.api.game import setup_config, start_poker
 from pypokerengine.players import BasePokerPlayer
-from pypokerengine.utils.card_utils import estimate_hole_card_win_rate, gen_cards
-import torch
-from torch.distributions import Categorical
+# from pypokerengine.utils.card_utils import estimate_hole_card_win_rate, Card, gen_cards
+from torch.utils.tensorboard import SummaryWriter
 import random as rand
-import random
+import math
+from itertools import combinations
 from typing import Dict
+
+
+suits = ['d','s','c','h']
+ranks = ['A','2','3','4','5','6','7','8','9','T','J','Q','K']
+cards = []
+for r in ranks:
+    for s in suits:
+        cards.append(r+s)
+
+def simulate(hand: List[str], table:List[str], players = 2):
+    hands = []
+    deck = random.sample(cards,len(cards))
+    hand = [card[1] + card[0].lower() for card in hand]
+    table = [card[1] + card[0].lower() for card in table]
+    full = table + hand
+    deck = list(filter(lambda x: x not in full, deck))
+    for i in range(players):
+        hn = []
+        hn.append(deck[0])
+        deck = deck[1:]
+        hn.append(deck[0])
+        deck = deck[1:]
+        hands.append(hn)
+    while len(table) < 5:
+        card = deck.pop(0)
+        table.append(card)
+        full.append(card)
+    my_hand_rank = evaluate_cards(full[0],full[1],full[2],full[3],full[4],full[5],full[6])
+
+    for check_hand in hands:
+        all_cards = table + check_hand
+        opponent = evaluate_cards(all_cards[0],all_cards[1],all_cards[2],all_cards[3],all_cards[4],all_cards[5],all_cards[6])
+        if opponent < my_hand_rank:
+            return 1
+        if opponent == my_hand_rank:
+            return 2
+        return 0
+
+def monte_carlo(hand, table, players=2, samples=100):
+    outcomes = np.zeros(3, dtype=np.int32)
+    for _ in range(samples):
+        outcome = simulate(hand, table, players)
+        outcomes[outcome] += 1
+    return outcomes / samples
 
 def get_stacks(seats, your_uuid):
     your_stack = next(s['stack'] for s in seats if s['uuid'] == your_uuid)
@@ -19,6 +65,50 @@ def is_big_blind(action_histories, player_uuid):
         if action["action"] == "BIGBLIND" and action["uuid"] == player_uuid:
             return True
     return False
+
+def linear_schedule(start, end, current_step, total_steps):
+    fraction = min(current_step / total_steps, 1.0)
+    return start + fraction * (end - start)
+
+
+class MonteCarloPlayer(BasePokerPlayer):
+    def __init__(self, tightness = 1):
+        super().__init__()
+        self.tightness = tightness
+        self.hands = 0
+
+    def declare_action(self, valid_actions, hole_card, round_state):
+        win_rate, loss_rate, tie_rate = monte_carlo(hole_card, round_state["community_card"], samples=100)
+
+        # Find valid actions
+        raise_action = next((a for a in valid_actions if a['action'] == 'raise'), None)
+        call_action = next((a for a in valid_actions if a['action'] == 'call'), None)
+        fold_action = next((a for a in valid_actions if a['action'] == 'fold'), None)
+        actions = (1 if action['action'] == 'RAISE' else 0 for street in reversed(['preflop', 'flop', 'turn', 'river'])
+                for action in reversed(round_state['action_histories'].get(street, [])) if action['uuid'] != self.uuid)
+        is_raise = next(actions, 0)
+
+        action = 'fold'
+        if is_raise == 0:  # Check situation
+            if win_rate >= (0.8 * self.tightness) and raise_action:
+                action = 'raise'
+            else:
+                action = 'call'  # Check
+        else:  # Facing a bet
+            if win_rate >= (0.6 * self.tightness):
+                if win_rate >= (0.8 * self.tightness) and raise_action:
+                    action = 'raise'
+                else:
+                    action = 'call'
+            else:
+                action = 'fold'
+        return action
+    def receive_game_start_message(self, game_info): pass
+    def receive_round_start_message(self, round_count, hole_card, seats): pass
+    def receive_street_start_message(self, street, round_state): pass
+    def receive_game_update_message(self, action, round_state): pass
+    def receive_round_result_message(self, winners, hand_info, round_state):
+        self.hands += 1
 
 class CallPlayer(BasePokerPlayer):
     def __init__(self):
@@ -106,14 +196,12 @@ class RandomPlayer(BasePokerPlayer):
         self.hands += 1
 
 class AITrainer(BasePokerPlayer):
-    def __init__(self, filename=None, hyperparams=Hyperparams(), disable_training=False):
+    def __init__(self, filename=None, hyperparams=Hyperparams(), disable_training=False, is_opponent=False):
         super().__init__()
         self.model = PPO(filename=filename, hyperparams=hyperparams)
         self.disable_training = disable_training
         self.folded_with_reward = False
-        self.prev_wr = None
-        self.prev_hole_card = None
-        self.prev_community_card = None
+        self.is_opponent = is_opponent
 
         # stats
         self.hands = 0
@@ -121,13 +209,6 @@ class AITrainer(BasePokerPlayer):
         self.raises = 0
         self.calls = 0
         self.rewards = 0
-        self.rewards_from_folding = 0
-
-        # track
-        self.last_wr = None
-        self.last_hole_card = None
-        self.last_community_card = None
-
 
     def declare_action(self, valid_actions, hole_card, round_state):
         my_stack, opponent_stack = get_stacks(round_state["seats"], self.uuid)
@@ -159,15 +240,27 @@ class AITrainer(BasePokerPlayer):
         if not hasattr(self, 'state'):
             self.state = state_prime
 
-        prob = self.model.pi(torch.tensor(self.state))
-        action = Categorical(prob).sample().item()
+        if self.disable_training:
+            self.model.eval()
+
+        if self.is_opponent:
+            action = self.model.get_opponent_action(torch.tensor(self.state))
+        else:
+            prob = self.model.pi(torch.tensor(self.state))
+            action = Categorical(prob).sample().item()
 
         # Training part
         if not self.disable_training:
             reward = 0
+            # penalize folds on calls
+            if action == 2:
+                win_rate, loss_rate, tie_rate = monte_carlo(hole_card, round_state["community_card"], samples=100)
+                if win_rate <= 0.5:
+                    reward = 0
+                    self.folded_with_reward = True
+
             self.model.put_data((self.state, action, reward, state_prime, prob[action].item(), False))
         self.state = state_prime
-
         if action == 0:
             for action_info in valid_actions:
                 if action_info["action"] == "raise":
@@ -213,15 +306,6 @@ class AITrainer(BasePokerPlayer):
             self.model.done()
             self.model.train_net(force = True)
 
-def run_game(player1, name1, player2, name2, first = True, verbose = 0):
-    config = setup_config(max_round=500, initial_stack=1000, small_blind_amount=10)
-    if random.random() > 0.5:
-        config.register_player(name=name1, algorithm=player1)
-        config.register_player(name=name2, algorithm=player2)
-    else:
-        config.register_player(name=name2, algorithm=player2)
-        config.register_player(name=name1, algorithm=player1)
-    return start_poker(config, verbose=verbose)
 
 def is_winner(game_result: Dict, player_name: str):
     players = game_result['players']
@@ -230,3 +314,22 @@ def is_winner(game_result: Dict, player_name: str):
     stack2 = next(player['stack'] for player in players if player['name'] != player_name)
     won = winner['name'] == player_name
     return won, stack, stack2
+
+def run_game(player1, name1, player2, name2, first = None, verbose = 0):
+    config = setup_config(max_round=500, initial_stack=1000, small_blind_amount=10)
+    if first is not None:
+        if first:
+            config.register_player(name=name1, algorithm=player1)
+            config.register_player(name=name2, algorithm=player2)
+        else:
+            config.register_player(name=name1, algorithm=player1)
+            config.register_player(name=name2, algorithm=player2)
+    else:
+        if random.random() > 0.5:
+            config.register_player(name=name1, algorithm=player1)
+            config.register_player(name=name2, algorithm=player2)
+        else:
+            config.register_player(name=name2, algorithm=player2)
+            config.register_player(name=name1, algorithm=player1)
+    return start_poker(config, verbose=verbose)
+

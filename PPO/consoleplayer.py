@@ -1,18 +1,18 @@
 # Play using console
-from ppoplayer import PPBomb
-from utils import run_game
-from pypokerengine.players import BasePokerPlayer
-import pypokerengine.utils.visualize_utils as U
-
-
-# Play using console
 import pprint
 pp = pprint.PrettyPrinter()
+from PPO.ppoplayer import PPBomb
+from PPO.utils import run_game
+from pypokerengine import BasePokerPlayer 
 
 
 class ConsolePlayer(BasePokerPlayer):
+  def __init__(self, input_receiver=None):
+    self.input_receiver = input_receiver if input_receiver else self.__gen_raw_input_wrapper()
+
   def declare_action(self, valid_actions, hole_card, round_state):
     print('========= DECLARE ACTION =========')
+    pp.pprint(round_state)
     pp.pprint({
         'valid_actions': valid_actions,
         'hole_card': hole_card,
@@ -52,8 +52,11 @@ class ConsolePlayer(BasePokerPlayer):
   def __wait_until_input(self, msg = ''):
     input(f'{msg} Enter some key to continue ...')
 
+  def __gen_raw_input_wrapper(self):
+    return lambda msg: input(msg)
+
   def __receive_action_from_console(self, valid_actions):
-    flg = input('Enter f(fold), c(call), r(raise).\n >> ')
+    flg = self.input_receiver('Enter f(fold), c(call), r(raise).\n >> ')
     if flg in self.__gen_valid_flg(valid_actions):
       if flg == 'f':
         return valid_actions[0]['action']

@@ -1,8 +1,8 @@
 # Play using console
 import pprint
 pp = pprint.PrettyPrinter()
-from PPO.ppoplayer import PPBomb
-from PPO.utils import run_game
+from ppoplayer import PPBomb
+from utils import run_game
 from pypokerengine import BasePokerPlayer 
 
 

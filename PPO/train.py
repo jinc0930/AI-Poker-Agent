@@ -3,17 +3,16 @@ import random
 import time
 from dataclasses import dataclass
 from typing import List, Optional, Callable, Dict
-import threading
 import copy
-import secrets
 import os
 import shutil
 import re
 import uuid
 import numpy as np
+import torch
 from torch.utils.tensorboard import SummaryWriter
-from PPO.model import Hyperparams
-from PPO.utils import AITrainer, BluffPlayer, CallPlayer, MonteCarloPlayer, is_winner, linear_schedule, run_game
+from model import Hyperparams
+from utils import AITrainer, BluffPlayer, CallPlayer, MonteCarloPlayer, is_winner, linear_schedule, run_game
 from pypokerengine.players import BasePokerPlayer
 
 @dataclass
@@ -63,7 +62,7 @@ class Agent:
                 return player
             hyperparams = self.hyperparams if self.hyperparams is not None else Hyperparams()
             # entropy schedule
-            hyperparams.entropy_coeff = linear_schedule(hyperparams.entropy_coeff, 0.0001, self.episodes, 100_000)
+            hyperparams.entropy_coeff = linear_schedule(hyperparams.entropy_coeff, 0.001, self.episodes, 500_000)
             return AITrainer(filename=self.hot_filepath, hyperparams=hyperparams)
         else:
             return self.load()
@@ -115,7 +114,6 @@ class Agent:
 class PFSP():
     def __init__(
         self,
-        iterations=1_000_000,
         writer=None,
         population_size = 100,
         snapshot_dir = 'population',
@@ -129,7 +127,6 @@ class PFSP():
         self.snapshot_dir = snapshot_dir
         self.writer = writer
         self.load_snapshot = load_snapshot
-        self.iterations = iterations
         self.population_size = population_size
         self.main_agents = main_agents
         self.frozen_agents = frozen_agents
@@ -141,9 +138,9 @@ class PFSP():
                 # Agent('RandomPlayer', load = lambda: RandomPlayer(), is_frozen = True ),
                 Agent('CallPlayer', load = lambda: CallPlayer(), is_frozen = True ),
                 Agent('BluffPlayer', load = lambda: BluffPlayer(), is_frozen = True ),
-                Agent('MonteCarloPlayer-1', load = lambda: MonteCarloPlayer(1), is_frozen = True ),
-                Agent('MonteCarloPlayer-0.8', load = lambda: MonteCarloPlayer(0.8), is_frozen = True ),
-                Agent('MonteCarloPlayer-0.6', load = lambda: MonteCarloPlayer(0.6), is_frozen = True ),
+                Agent('MonteCarloPlayer-0', load = lambda: MonteCarloPlayer(0), is_frozen = True ),
+                Agent('MonteCarloPlayer-1', load = lambda: MonteCarloPlayer(0.5), is_frozen = True ),
+                Agent('MonteCarloPlayer-0.5', load = lambda: MonteCarloPlayer(1), is_frozen = True ),
             ]
 
         self.exploiter_agents = [
@@ -189,6 +186,10 @@ class PFSP():
             a_agent.rank = i
             print(f"{a_agent.get_display_name():<30} {(a_agent.wr * 100.):<6.2f}% {a_agent.games:<5}")
 
+
+    def add_frozen_agent(self, agent: Agent):
+        self.frozen_agents.append(agent)
+
     def evaluate(self, episodes = 100):
         agent = self.main_agents[0]
         wins = 0
@@ -210,7 +211,7 @@ class PFSP():
         return wins / div, chips / div
 
 
-    def select_opponent(self, win_rate_weight=0.9, recency_weight=0.1, temperature=0.15):
+    def select_opponent(self, win_rate_weight=0.9, recency_weight=0.1, temperature=0.1):
         if len(self.frozen_agents) == 1:
             return self.frozen_agents[0]
 
@@ -374,18 +375,9 @@ if __name__ == '__main__':
 
     # Frozen agents
     frozen_agents = [
-        Agent('CallPlayer', load = lambda: CallPlayer(), is_frozen = True ),
-        Agent('BluffPlayer', load = lambda: BluffPlayer(), is_frozen = True ),
-        Agent('MonteCarloPlayer-1', load = lambda: MonteCarloPlayer(1), is_frozen = True ),
-        Agent('MonteCarloPlayer-0.9', load = lambda: MonteCarloPlayer(0.9), is_frozen = True ),
-        Agent('MonteCarloPlayer-0.8', load = lambda: MonteCarloPlayer(0.8), is_frozen = True ),
-        Agent('MonteCarloPlayer-0.7', load = lambda: MonteCarloPlayer(0.7), is_frozen = True ),
-        Agent('MonteCarloPlayer-0.6', load = lambda: MonteCarloPlayer(0.6), is_frozen = True ),
-        Agent('MonteCarloPlayer-0.5', load = lambda: MonteCarloPlayer(0.5), is_frozen = True ),
         Agent('MonteCarloPlayer-0.4', load = lambda: MonteCarloPlayer(0.4), is_frozen = True ),
-        Agent('MonteCarloPlayer-0.3', load = lambda: MonteCarloPlayer(0.3), is_frozen = True ),
-        Agent('MonteCarloPlayer-0.2', load = lambda: MonteCarloPlayer(0.2), is_frozen = True ),
-        Agent('MonteCarloPlayer-0.1', load = lambda: MonteCarloPlayer(0.1), is_frozen = True ),
+        Agent('MonteCarloPlayer-0.5', load = lambda: MonteCarloPlayer(0.5), is_frozen = True ),
+        Agent('MonteCarloPlayer-0.6', load = lambda: MonteCarloPlayer(0.6), is_frozen = True ),
     ]
 
     # for fold, raisee in [(0.01, 0.5)]:
@@ -398,10 +390,9 @@ if __name__ == '__main__':
 
     # If load_snapshot is True you might not want to use frozen and main_agents
     trainer = PFSP(
-        iterations=1_000_000,
         writer=writer,
         population_size = 30,
-        snapshot_dir = 'star1000',
+        snapshot_dir = 'starstar',
         load_snapshot = True,
         main_agents=main_agents,
         frozen_agents=frozen_agents
@@ -409,7 +400,7 @@ if __name__ == '__main__':
 
     # Training loop
     eval_episodes = 0
-    for i in range(1000):
+    for i in range(2000):
         wr = trainer.train_iteration(episodes=100)
         # update league
         if i > 0 and i % 10 == 0:
@@ -424,5 +415,13 @@ if __name__ == '__main__':
             writer.add_scalar(trainer.main_agents[0].name + '/EvalWR', wr, eval_episodes)
             writer.add_scalar(trainer.main_agents[0].name + '/EvalChips', chips, eval_episodes)
             eval_episodes += 1
+
+        if i > 0 and i % 10 == 0:
+            if i < 1000:
+                difficulty = linear_schedule(0.5, 1, i, 1000)
+                trainer.add_frozen_agent(
+                    Agent(f'MonteCarloPlayer-{difficulty:.2f}', load = lambda: MonteCarloPlayer(difficulty), is_frozen = True )
+                )
+                print(f"Added opponent at iteration {i} with difficulty {difficulty:.4f}")
 
     writer.close()

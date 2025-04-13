@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,10 +8,10 @@ from dataclasses import dataclass
 
 @dataclass
 class Hyperparams:
-    learning_rate: float = 0.0005
-    gamma: float = 0.99
+    learning_rate: float = 0.0003
+    gamma: float = 0.95
     lmbda: float = 0.95
-    eps_clip: float = 0.1
+    eps_clip: float = 0.2
     K_epoch: int = 4
     T_horizon: int = 100
     entropy_coeff: float = 0.01
@@ -25,9 +26,9 @@ class PPO(nn.Module):
         self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.fc1 = nn.Linear(33, 128)
-        self.fc2 = nn.Linear(128, 64)
-        self.fc_pi = nn.Linear(64, 3)
-        self.fc_v = nn.Linear(64, 1)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc_pi = nn.Linear(128, 3)
+        self.fc_v = nn.Linear(128, 1)
         self.optimizer = optim.Adam(self.parameters(), lr=hyperparams.learning_rate)
 
         # Orthogonal initialization

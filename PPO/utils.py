@@ -7,10 +7,14 @@ from pypokerengine.players import BasePokerPlayer
 # from pypokerengine.utils.card_utils import estimate_hole_card_win_rate, Card, gen_cards
 from torch.utils.tensorboard import SummaryWriter
 import random as rand
-import math
-from itertools import combinations
 from typing import Dict
-
+from model import Hyperparams, PPO
+from encoder import calculate_bets, encode
+import torch
+from torch.distributions import Categorical
+import random as rand
+import random
+from typing import Dict
 
 suits = ['d','s','c','h']
 ranks = ['A','2','3','4','5','6','7','8','9','T','J','Q','K']
@@ -48,12 +52,13 @@ def simulate(hand: List[str], table:List[str], players = 2):
             return 2
         return 0
 
-def monte_carlo(hand, table, players=2, samples=100):
+def monte_carlo(hand, table, players=2, samples: int =100):
     outcomes = np.zeros(3, dtype=np.int32)
     for _ in range(samples):
         outcome = simulate(hand, table, players)
         outcomes[outcome] += 1
     return outcomes / samples
+
 
 def get_stacks(seats, your_uuid):
     your_stack = next(s['stack'] for s in seats if s['uuid'] == your_uuid)
@@ -72,36 +77,43 @@ def linear_schedule(start, end, current_step, total_steps):
 
 
 class MonteCarloPlayer(BasePokerPlayer):
-    def __init__(self, tightness = 1):
+    def __init__(self, difficulty=0.5):
         super().__init__()
-        self.tightness = tightness
+        self.difficulty = max(0.0, min(1.0, difficulty))  # Clamp to [0,1]
         self.hands = 0
 
     def declare_action(self, valid_actions, hole_card, round_state):
-        win_rate, loss_rate, tie_rate = monte_carlo(hole_card, round_state["community_card"], samples=100)
+        win_rate, loss_rate, tie_rate = monte_carlo(hole_card, round_state["community_card"], samples=max(int(100 * self.difficulty), 10))
 
         # Find valid actions
         raise_action = next((a for a in valid_actions if a['action'] == 'raise'), None)
         call_action = next((a for a in valid_actions if a['action'] == 'call'), None)
         fold_action = next((a for a in valid_actions if a['action'] == 'fold'), None)
+
+        # Check if we're facing a raise
         actions = (1 if action['action'] == 'RAISE' else 0 for street in reversed(['preflop', 'flop', 'turn', 'river'])
                 for action in reversed(round_state['action_histories'].get(street, [])) if action['uuid'] != self.uuid)
         is_raise = next(actions, 0)
 
+        # Calculate thresholds based on difficulty
+        # Higher difficulty = higher thresholds = tighter play
+        raise_threshold = 0.3 + (0.5 * self.difficulty)
+        call_threshold = 0.2 + (0.4 * self.difficulty)
         action = 'fold'
+
         if is_raise == 0:  # Check situation
-            if win_rate >= (0.8 * self.tightness) and raise_action:
+            if win_rate >= raise_threshold and raise_action:
                 action = 'raise'
             else:
                 action = 'call'  # Check
         else:  # Facing a bet
-            if win_rate >= (0.6 * self.tightness):
-                if win_rate >= (0.8 * self.tightness) and raise_action:
-                    action = 'raise'
-                else:
-                    action = 'call'
+            if win_rate >= raise_threshold and raise_action:
+                action = 'raise'
+            elif win_rate >= call_threshold:
+                action = 'call'
             else:
                 action = 'fold'
+
         return action
     def receive_game_start_message(self, game_info): pass
     def receive_round_start_message(self, round_count, hole_card, seats): pass
@@ -252,7 +264,6 @@ class AITrainer(BasePokerPlayer):
         # Training part
         if not self.disable_training:
             reward = 0
-            # penalize folds on calls
             if action == 2:
                 win_rate, loss_rate, tie_rate = monte_carlo(hole_card, round_state["community_card"], samples=100)
                 if win_rate <= 0.5:
@@ -332,4 +343,3 @@ def run_game(player1, name1, player2, name2, first = None, verbose = 0):
             config.register_player(name=name2, algorithm=player2)
             config.register_player(name=name1, algorithm=player1)
     return start_poker(config, verbose=verbose)
-

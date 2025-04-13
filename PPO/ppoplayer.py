@@ -1,7 +1,6 @@
 import torch
-import PPO
-from PPO.encoder import encode
-from PPO.utils import get_stacks
+from encoder import encode
+from utils import get_stacks
 from pypokerengine import BasePokerPlayer
 from torch.distributions import Categorical
 

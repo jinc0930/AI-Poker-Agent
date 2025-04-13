@@ -139,8 +139,8 @@ class PFSP():
                 Agent('CallPlayer', load = lambda: CallPlayer(), is_frozen = True ),
                 Agent('BluffPlayer', load = lambda: BluffPlayer(), is_frozen = True ),
                 Agent('MonteCarloPlayer-0', load = lambda: MonteCarloPlayer(0), is_frozen = True ),
-                Agent('MonteCarloPlayer-1', load = lambda: MonteCarloPlayer(0.5), is_frozen = True ),
-                Agent('MonteCarloPlayer-0.5', load = lambda: MonteCarloPlayer(1), is_frozen = True ),
+                Agent('MonteCarloPlayer-1', load = lambda: MonteCarloPlayer(1), is_frozen = True ),
+                Agent('MonteCarloPlayer-0.5', load = lambda: MonteCarloPlayer(0.5), is_frozen = True ),
             ]
 
         self.exploiter_agents = [

@@ -1,17 +1,18 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.distributions import Categorical
 from dataclasses import dataclass
-import os
 
 @dataclass
 class Hyperparams:
-    learning_rate: float = 0.0001 # Lower LR to improve stability
-    gamma: float = 0.99 # long-term strategic planning
+    learning_rate: float = 0.0003
+    gamma: float = 0.95
     lmbda: float = 0.95
-    eps_clip: float = 0.2 # Allows more policy exploration
-    K_epoch: int = 3
+    eps_clip: float = 0.2
+    K_epoch: int = 4
     T_horizon: int = 100
     entropy_coeff: float = 0.01
 
@@ -24,9 +25,8 @@ class PPO(nn.Module):
         # Set device to CUDA if available or provided device
         self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        self.fc1 = nn.Linear(31, 128)
+        self.fc1 = nn.Linear(33, 128)
         self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, 128)
         self.fc_pi = nn.Linear(128, 3)
         self.fc_v = nn.Linear(128, 1)
         self.optimizer = optim.Adam(self.parameters(), lr=hyperparams.learning_rate)
@@ -34,13 +34,11 @@ class PPO(nn.Module):
         # Orthogonal initialization
         nn.init.orthogonal_(self.fc1.weight, gain=nn.init.calculate_gain('relu'))
         nn.init.orthogonal_(self.fc2.weight, gain=nn.init.calculate_gain('relu'))
-        nn.init.orthogonal_(self.fc3.weight, gain=nn.init.calculate_gain('relu'))
         nn.init.orthogonal_(self.fc_pi.weight, gain=1.0)
 
-        # Zero bias initialization (optional but common)
+        # Zero bias initialization
         nn.init.zeros_(self.fc1.bias)
         nn.init.zeros_(self.fc2.bias)
-        nn.init.zeros_(self.fc3.bias)
         nn.init.zeros_(self.fc_pi.bias)
 
         if filename is not None:
@@ -56,7 +54,6 @@ class PPO(nn.Module):
         x = x.to(self.device)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
         x = self.fc_pi(x)
         prob = F.softmax(x, dim=softmax_dim)
         return prob
@@ -65,7 +62,6 @@ class PPO(nn.Module):
         x = x.to(self.device)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
         v = self.fc_v(x)
         return v
 
@@ -90,7 +86,6 @@ class PPO(nn.Module):
         s_lst, a_lst, r_lst, s_prime_lst, prob_a_lst, done_lst = [], [], [], [], [], []
         for transition in self.data:
             s, a, r, s_prime, prob_a, done = transition
-
             s_lst.append(s)
             a_lst.append([a])
             r_lst.append([r])
@@ -109,6 +104,22 @@ class PPO(nn.Module):
         self.data = []
         return s, a, r, s_prime, done_mask, prob_a
 
+    def get_opponent_action(self, state, noise=True):
+        with torch.no_grad():
+            state = state.to(self.device)
+            logits = F.relu(self.fc1(state))
+            logits = F.relu(self.fc2(logits))
+            logits = self.fc_pi(logits)
+            if noise:
+                noise = torch.normal(mean=0.0, std=0.1, size=logits.shape).to(self.device)
+                noisy_logits = logits + noise
+            else:
+                noisy_logits = logits
+
+            prob = F.softmax(noisy_logits, dim=0)
+            action_dist = Categorical(prob)
+        return action_dist.sample().item()
+
     def train_net(self, force = False):
         if len(self.data) < self.hyperparams.T_horizon and not force:
             return
@@ -116,7 +127,6 @@ class PPO(nn.Module):
             return
 
         s, a, r, s_prime, done_mask, prob_a = self.make_batch()
-
         for i in range(self.hyperparams.K_epoch):
             td_target = r + self.hyperparams.gamma * self.v(s_prime) * done_mask
             delta = td_target - self.v(s)

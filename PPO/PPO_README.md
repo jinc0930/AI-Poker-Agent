@@ -3,6 +3,7 @@ pyenv activate ai-poker-agent
 pip install torch
 pip install numpy
 pip install tensorboard
+pip install phevaluator
 
     python3 ./PPO/train.py  
     tensorboard --logdir ./PPO/runs 
@@ -33,11 +34,3 @@ https://github.com/ishikota/PyPokerEngine
 https://github.com/datvodinh/ppo-transformer
 https://github.com/curvysquare/PPO-and-A2C-for-HULH-poker
 https://github.com/seungeunrho/minimalRL/tree/master
-
-## Notes/Questions
-BB/100 metric
-
-TODO:
-Need to update trained metrics and keep it saved somehow
-Need to think of opponent features - currently not really learning from opponent behaviors
-Should we throw in wild card rounds? (i.e. decide strategy with some uncertainty)

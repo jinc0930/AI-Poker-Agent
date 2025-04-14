@@ -1,15 +1,13 @@
-from utils import get_stacks
-from pypokerengine.players import BasePokerPlayer
-from model import PPO
 import torch
+from PPO.feature_extraction import encode
+from utils import get_stacks
+from pypokerengine import BasePokerPlayer
 from torch.distributions import Categorical
-from encoder import encode
-from pypokerengine.players import BasePokerPlayer
 
 class PPBomb(BasePokerPlayer):
     def declare_action(self, valid_actions, hole_card, round_state):
         if not hasattr(self, 'model'):
-            self.model = PPO(filename='/content/star2/Star2_23502.pt')
+            self.model = PPO(filename='/content/star4/Star3_501.pt')
             self.model.eval()
         my_stack, opponent_stack = get_stacks(round_state["seats"], self.uuid)
         call_action = next((a for a in valid_actions if a['action'] == 'call'), None)
@@ -33,8 +31,7 @@ class PPBomb(BasePokerPlayer):
             round_count=round_state["round_count"],
             is_small_blind = int(any(action['action'] == 'SMALLBLIND' and action['uuid'] == self.uuid for action in round_state['action_histories'].get('preflop', []))),
             all_action_histories=self.memory,
-            player_id=self.uuid,
-            amount_to_call=call_action.get('amount', 0)
+            player_id=self.uuid
         )
 
         if not hasattr(self, 'state'):

@@ -3,7 +3,6 @@ import math
 def card_to_num(card_str):
     """
     Convert a card string to a tuple of (rank, suit)
-
     :param card_str: Card string in format like 'H10', 'CA', 'D7', etc.
     :return: Tuple with (rank_index, suit_index)
     """
@@ -19,7 +18,6 @@ def card_to_num(card_str):
         rank = int(card_str[1:])
     else:
         raise ValueError(f"Invalid card string: {card_str}")
-
     return (rank, suit)
 
 # Straight potential calculation
@@ -61,7 +59,6 @@ def get_last_opponent_action(action_histories, my_uuid):
         for action in reversed(round_actions):
             if action['uuid'] != my_uuid:
                 return action, street
-
     return None, None
 
 def calculate_bets(action_histories, my_uuid):
@@ -90,53 +87,7 @@ def calculate_bets(action_histories, my_uuid):
                     opponent_bet += amount
     return my_bet, opponent_bet
 
-def log_normalize(x, x_max):
-    return math.log1p(x) / math.log1p(x_max)
-
-
-def encode_action_histories(all_action_histories, player_id, window_size=5):
-    streets = ['preflop', 'flop', 'turn', 'river']
-    features = []
-
-    # Long-term stats
-    player_raises, player_calls = 0, 0
-    opp_raises, opp_calls = 0, 0
-
-    # Recent stats (last window_size hands)
-    recent_opp_raises = 0
-
-    for i, action_histories in enumerate(all_action_histories):
-        for street, street_actions in action_histories.items():
-            if street not in streets:
-                continue
-            for action in street_actions:
-                target = 'player' if action['uuid'] == player_id else 'opponent'
-                action_type = action['action']
-
-                if action_type == 'RAISE':
-                    if target == 'player':
-                        player_raises += 1
-                    else:
-                        opp_raises += 1
-                        if i >= len(all_action_histories) - window_size:
-                            recent_opp_raises += 1
-                elif action_type == 'CALL':
-                    if target == 'player':
-                        player_calls += 1
-                    else:
-                        opp_calls += 1
-
-    # Compute features
-    player_total = player_raises + player_calls
-    opp_total = opp_raises + opp_calls
-    features.append(player_raises / player_total if player_total > 0 else 0)  # Player aggression
-    features.append(opp_raises / opp_total if opp_total > 0 else 0)  # Opponent aggression
-    features.append(math.tanh(recent_opp_raises / window_size))  # Recent opponent raises
-
-    return features
-
-
-def encode_action_histories_v2(all_action_histories, player_id, window_size=5):
+def encode_action_histories(all_action_histories, player_id, window_size=10):
     streets = ['preflop', 'flop', 'turn', 'river']
     features = []
 
@@ -177,8 +128,23 @@ def encode_action_histories_v2(all_action_histories, player_id, window_size=5):
     )
     features.append(math.tanh(recent_opp_raises / window_size))
 
+    # action_map = {'SMALLBLIND': 0, 'BIGBLIND': 0, 'CALL': 0, 'RAISE': 1}
+    is_opp_last_raise = -1
+    is_last_raise = -1
+    hist = all_action_histories[-1]
+    for street in reversed(streets):  # Check latest street first
+        for action in reversed(hist.get(street, [])):
+            if action['uuid'] != player_id:
+                is_opp_last_raise = 1 if action['action'] == 'RAISE' else 0
+            else:
+                is_last_raise = 1 if action['action'] == 'RAISE' else 0
+            if is_opp_last_raise != -1 and is_last_raise != -1:
+                break
+        if is_opp_last_raise != -1 and is_last_raise != -1:
+            break
+    features.append(is_opp_last_raise if is_opp_last_raise != -1 else 0)
+    features.append(is_last_raise if is_last_raise != -1 else 0)
     return features
-
 
 def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_stack, round_count, is_small_blind, all_action_histories, player_id):
     hole_cards = list(map(card_to_num, hole_cards))
@@ -192,10 +158,8 @@ def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_s
     # Basic hole card features
     high_card = max(rank1, rank2) / 12  # Normalized high card
     low_card = min(rank1, rank2) / 12   # Normalized low card
-
     high_suit = max(suit1, suit2) / 4  # Normalized high suit
     low_suit = min(suit1, suit2) / 4   # Normalized low suit
-
     suited = 1.0 if suit1 == suit2 else 0.0  # Whether cards are suited
     pair = 1.0 if rank1 == rank2 else 0.0    # Whether cards are a pair
 
@@ -227,7 +191,6 @@ def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_s
     # Pairs and trips in all cards
     pairs_all = min(sum(1 for count in rank_counts_all.values() if count == 2), 2) / 2.0
     trips_all = min(sum(1 for count in rank_counts_all.values() if count >= 3), 1) / 1.0
-
 
     # Calculate straight and flush potentials
     straight_potential_community = calc_straight_potential(community_ranks)
@@ -266,6 +229,6 @@ def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_s
         is_small_blind,
         my_bet / 1990,
         opponent_bet / 1990,
-    ] + encode_action_histories_v2(all_action_histories, player_id)
+    ] + encode_action_histories(all_action_histories, player_id)
 
     return features

@@ -86,7 +86,6 @@ class PPO(nn.Module):
         s_lst, a_lst, r_lst, s_prime_lst, prob_a_lst, done_lst = [], [], [], [], [], []
         for transition in self.data:
             s, a, r, s_prime, prob_a, done = transition
-
             s_lst.append(s)
             a_lst.append([a])
             r_lst.append([r])
@@ -128,7 +127,6 @@ class PPO(nn.Module):
             return
 
         s, a, r, s_prime, done_mask, prob_a = self.make_batch()
-
         for i in range(self.hyperparams.K_epoch):
             td_target = r + self.hyperparams.gamma * self.v(s_prime) * done_mask
             delta = td_target - self.v(s)

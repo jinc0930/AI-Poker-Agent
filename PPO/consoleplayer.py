@@ -5,7 +5,6 @@ from ppoplayer import PPBomb
 from utils import run_game
 from pypokerengine import BasePokerPlayer 
 
-
 class ConsolePlayer(BasePokerPlayer):
   def __init__(self, input_receiver=None):
     self.input_receiver = input_receiver if input_receiver else self.__gen_raw_input_wrapper()

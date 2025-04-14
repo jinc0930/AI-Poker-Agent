@@ -3,7 +3,6 @@ import math
 def card_to_num(card_str):
     """
     Convert a card string to a tuple of (rank, suit)
-
     :param card_str: Card string in format like 'H10', 'CA', 'D7', etc.
     :return: Tuple with (rank_index, suit_index)
     """
@@ -19,7 +18,6 @@ def card_to_num(card_str):
         rank = int(card_str[1:])
     else:
         raise ValueError(f"Invalid card string: {card_str}")
-
     return (rank, suit)
 
 # Straight potential calculation
@@ -61,7 +59,6 @@ def get_last_opponent_action(action_histories, my_uuid):
         for action in reversed(round_actions):
             if action['uuid'] != my_uuid:
                 return action, street
-
     return None, None
 
 def calculate_bets(action_histories, my_uuid):
@@ -148,7 +145,6 @@ def encode_action_histories(all_action_histories, player_id, window_size=10):
     features.append(is_opp_last_raise if is_opp_last_raise != -1 else 0)
     features.append(is_last_raise if is_last_raise != -1 else 0)
     return features
-
 
 def encode(hole_cards, community_cards, street: str, pot_size, stack, opponent_stack, round_count, is_small_blind, all_action_histories, player_id):
     hole_cards = list(map(card_to_num, hole_cards))

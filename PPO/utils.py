@@ -1,80 +1,12 @@
-from phevaluator import evaluate_cards
 import random
-from typing import List
-import numpy as np
+import torch
+from typing import Dict
 from pypokerengine.api.game import setup_config, start_poker
 from pypokerengine.players import BasePokerPlayer
-# from pypokerengine.utils.card_utils import estimate_hole_card_win_rate, Card, gen_cards
-from torch.utils.tensorboard import SummaryWriter
-import random as rand
-from typing import Dict
-from model import Hyperparams, PPO
-from encoder import calculate_bets, encode
-import torch
 from torch.distributions import Categorical
-import random as rand
-import random
-from typing import Dict
-
-suits = ['d','s','c','h']
-ranks = ['A','2','3','4','5','6','7','8','9','T','J','Q','K']
-cards = []
-for r in ranks:
-    for s in suits:
-        cards.append(r+s)
-
-def simulate(hand: List[str], table:List[str], players = 2):
-    hands = []
-    deck = random.sample(cards,len(cards))
-    hand = [card[1] + card[0].lower() for card in hand]
-    table = [card[1] + card[0].lower() for card in table]
-    full = table + hand
-    deck = list(filter(lambda x: x not in full, deck))
-    for i in range(players):
-        hn = []
-        hn.append(deck[0])
-        deck = deck[1:]
-        hn.append(deck[0])
-        deck = deck[1:]
-        hands.append(hn)
-    while len(table) < 5:
-        card = deck.pop(0)
-        table.append(card)
-        full.append(card)
-    my_hand_rank = evaluate_cards(full[0],full[1],full[2],full[3],full[4],full[5],full[6])
-
-    for check_hand in hands:
-        all_cards = table + check_hand
-        opponent = evaluate_cards(all_cards[0],all_cards[1],all_cards[2],all_cards[3],all_cards[4],all_cards[5],all_cards[6])
-        if opponent < my_hand_rank:
-            return 1
-        if opponent == my_hand_rank:
-            return 2
-        return 0
-
-def monte_carlo(hand, table, players=2, samples: int =100):
-    outcomes = np.zeros(3, dtype=np.int32)
-    for _ in range(samples):
-        outcome = simulate(hand, table, players)
-        outcomes[outcome] += 1
-    return outcomes / samples
-
-
-def get_stacks(seats, your_uuid):
-    your_stack = next(s['stack'] for s in seats if s['uuid'] == your_uuid)
-    opponent_stack = next(s['stack'] for s in seats if s['uuid'] != your_uuid)
-    return your_stack, opponent_stack
-
-def is_big_blind(action_histories, player_uuid):
-    for action in action_histories['preflop']:
-        if action["action"] == "BIGBLIND" and action["uuid"] == player_uuid:
-            return True
-    return False
-
-def linear_schedule(start, end, current_step, total_steps):
-    fraction = min(current_step / total_steps, 1.0)
-    return start + fraction * (end - start)
-
+from model import Hyperparams, PPO
+from feature_extraction import calculate_bets, encode
+from hand_strength import monte_carlo, get_stacks
 
 class MonteCarloPlayer(BasePokerPlayer):
     def __init__(self, difficulty=0.5):
@@ -193,7 +125,7 @@ class RandomPlayer(BasePokerPlayer):
         return valid_actions[0]["action"]
 
     def __choice_action(self, valid_actions):
-        r = rand.random()
+        r = random.random()
         if r <= self.fold_ratio:
             return 'fold'
         elif r <= self.call_ratio:
@@ -316,7 +248,6 @@ class AITrainer(BasePokerPlayer):
             self.rewards += reward
             self.model.done()
             self.model.train_net(force = True)
-
 
 def is_winner(game_result: Dict, player_name: str):
     players = game_result['players']

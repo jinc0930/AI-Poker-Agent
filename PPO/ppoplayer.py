@@ -1,5 +1,5 @@
 import torch
-from encoder import encode
+from PPO.feature_extraction import encode
 from utils import get_stacks
 from pypokerengine import BasePokerPlayer
 from torch.distributions import Categorical

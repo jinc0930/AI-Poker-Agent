@@ -1,18 +1,15 @@
 import os
-import random
 import time
-from dataclasses import dataclass
-from typing import List, Optional, Callable, Dict
-import copy
-import os
 import shutil
-import re
 import uuid
 import numpy as np
 import torch
+from dataclasses import dataclass
+from typing import List, Optional, Callable
 from torch.utils.tensorboard import SummaryWriter
 from model import Hyperparams
-from utils import AITrainer, BluffPlayer, CallPlayer, MonteCarloPlayer, is_winner, linear_schedule, run_game
+from utils import AITrainer, BluffPlayer, CallPlayer, MonteCarloPlayer, is_winner, run_game
+from hand_strength import linear_schedule
 from pypokerengine.players import BasePokerPlayer
 
 @dataclass
@@ -258,9 +255,6 @@ class PFSP():
         agent.raises = self.ema(agent.raises, p1.raises  / p1.hands)
         agent.calls = self.ema(agent.calls, p1.calls  / p1.hands)
         if agent.is_model:
-            #reward = 1 if is_win else -1
-            #reward = agent.folds/agent.hands if is_win else -1
-            #reward = ((chips - 1000)/1000)
             reward = 1 if is_win else -1
             p1.done_with_reward(reward)
             agent.rewards = self.ema(agent.rewards, p1.rewards)
@@ -379,12 +373,6 @@ if __name__ == '__main__':
         Agent('MonteCarloPlayer-0.5', load = lambda: MonteCarloPlayer(0.5), is_frozen = True ),
         Agent('MonteCarloPlayer-0.6', load = lambda: MonteCarloPlayer(0.6), is_frozen = True ),
     ]
-
-    # for fold, raisee in [(0.01, 0.5)]:
-    #     a = RandomPlayer()
-    #     a.set_action_ratio(fold, raisee, 1 - (fold + raisee))
-    #     frozen_agents.append(Agent(f'RandomPlayer{fold}-{raisee}', load = lambda: RandomPlayer(), is_frozen = True ))
-
 
     writer = SummaryWriter(log_dir='logs/arena_' + str(int(time.time())))
 

@@ -360,18 +360,17 @@ class PFSP():
 if __name__ == '__main__':
     # Main agents
     main_agents = [
-        Agent(
-            name = 'Star',
-            is_model = True,
-            hyperparams = Hyperparams(),
-        ),
+        # Agent(
+        #     name = 'Star',
+        #     is_model = True,
+        #     hyperparams = Hyperparams(),
+        # ),
     ]
 
     # Frozen agents
     frozen_agents = [
-        Agent('MonteCarloPlayer-0.4', load = lambda: MonteCarloPlayer(0.4), is_frozen = True ),
-        Agent('MonteCarloPlayer-0.5', load = lambda: MonteCarloPlayer(0.5), is_frozen = True ),
-        Agent('MonteCarloPlayer-0.6', load = lambda: MonteCarloPlayer(0.6), is_frozen = True ),
+        Agent('CallPlayer', load = lambda: CallPlayer(), is_frozen = True ),
+        Agent('BluffPlayer', load = lambda: BluffPlayer(), is_frozen = True ),
     ]
 
     writer = SummaryWriter(log_dir='logs/arena_' + str(int(time.time())))
@@ -395,7 +394,7 @@ if __name__ == '__main__':
             trainer.print_rank()
             trainer.update_population()
             #trainer.replicate('exploiter')
-            trainer.replicate('main')
+            # trainer.replicate('main')
 
         if i > 0 and i % 20 == 0:
             wr, chips = trainer.evaluate(episodes=100)
@@ -404,12 +403,12 @@ if __name__ == '__main__':
             writer.add_scalar(trainer.main_agents[0].name + '/EvalChips', chips, eval_episodes)
             eval_episodes += 1
 
-        if i > 0 and i % 10 == 0:
-            if i < 1000:
-                difficulty = linear_schedule(0.5, 1, i, 1000)
-                trainer.add_frozen_agent(
-                    Agent(f'MonteCarloPlayer-{difficulty:.2f}', load = lambda: MonteCarloPlayer(difficulty), is_frozen = True )
-                )
-                print(f"Added opponent at iteration {i} with difficulty {difficulty:.4f}")
+        # if i > 0 and i % 10 == 0:
+        #     if i < 1000:
+        #         difficulty = linear_schedule(0.5, 1, i, 1000)
+        #         trainer.add_frozen_agent(
+        #             Agent(f'MonteCarloPlayer-{difficulty:.2f}', load = lambda: MonteCarloPlayer(difficulty), is_frozen = True )
+        #         )
+        #         print(f"Added opponent at iteration {i} with difficulty {difficulty:.4f}")
 
     writer.close()

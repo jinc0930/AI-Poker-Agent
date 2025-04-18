@@ -17,7 +17,6 @@ pypokergui serve /Users/changjin/baa-baa-barn/AI-Poker-Agent/PPO/poker_conf.yaml
     ## bug fix 
         https://github.com/ishikota/PyPokerGUI/issues/6#event-1254261637
 
-
 ## references 
 Papers (PPO):
 https://arxiv.org/pdf/1707.06347

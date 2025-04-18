@@ -3,8 +3,6 @@ from ppoplayer import PPBomb
 from utils import run_game
 from pypokerengine.players import BasePokerPlayer
 import pypokerengine.utils.visualize_utils as U
-
-
 # Play using console
 import pprint
 pp = pprint.PrettyPrinter()

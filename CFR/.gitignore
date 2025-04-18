@@ -1,0 +1,7 @@
+pypokerengine
+minicfr
+checkpoints
+__pycache__
+*.pickle
+data
+lgb_hand_equity_model.txt

@@ -1,7 +1,6 @@
 import torch
+from hand_strength import  get_stacks
 from feature_extraction import encode
-from pypokerengine.api.game import setup_config, start_poker
-from utils import BluffPlayer, RandomPlayer, get_stacks, is_winner, run_game
 from model import PPO
 from pypokerengine.players import BasePokerPlayer
 from torch.distributions import Categorical
@@ -68,30 +67,3 @@ class CustomPlayer(BasePokerPlayer):
 
 def setup_ai():
     return CustomPlayer()
-
-
-
-
-
-
-
-
-
-# test
-
-def evaluate(episodes = 100):
-    wins = 0
-    chips = 0
-    for i in range(episodes):
-        p1 = CustomPlayer()
-        p2 = BluffPlayer()
-        with torch.no_grad():
-            game_result = run_game(p1, 'CustomPlayer', p2, 'BluffPlayer', first=i % 2 == 0)
-            is_win, chips, _ = is_winner(game_result, 'CustomPlayer')
-            wins += 1 if is_win else 0
-            chips += (chips - 1000)
-    return wins / episodes, chips / episodes
-
-if __name__ == '__main__':
-    wr, chips = evaluate()
-    print(f'yippie, wr = {wr}')

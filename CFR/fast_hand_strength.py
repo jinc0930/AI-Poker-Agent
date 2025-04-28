@@ -1,11 +1,13 @@
+
+from functools import partial
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
+import random
+from typing import List, Tuple
 import numpy as np
 from tqdm import tqdm
 from hand import RANKS, SUITS, embed_with_community
-from phevaluator import evaluate_cards
-import random
-from typing import List, Tuple
+from phevaluator.evaluator import evaluate_cards
 
 suits = ['d','s','c','h']
 ranks = ['A','2','3','4','5','6','7','8','9','T','J','Q','K']
@@ -43,16 +45,15 @@ def hand_strength(hole_cards: List[str], community_cards: List[str], players: in
             return 2
         return 0
 
-def estimate_hand_strength(hole_cards: List[str], community_cards: List[str], players: int = 2, samples: int = 100) -> np.ndarray:
+def estimate_hand_strength(hole_cards: List[str], community_cards: List[str], players: int = 2, simulations: int = 100) -> np.ndarray:
     # wins, losses, ties
     outcomes = np.zeros(3, dtype=np.float32)
-    for _ in range(samples):
+    for _ in range(simulations):
         outcome = hand_strength(hole_cards, community_cards, players)
         outcomes[outcome] += 1
-    return outcomes / samples
+    return outcomes / simulations
 
-
-def sample_hand_data(_) -> Tuple[List[float], np.float32]:
+def sample_hand_data(_, simulations: int) -> Tuple[List[float], np.float32]:
     deck = [s + r for r in RANKS for s in SUITS]
     np.random.shuffle(deck)
     hole_cards = deck[:2]
@@ -68,15 +69,16 @@ def sample_hand_data(_) -> Tuple[List[float], np.float32]:
         community_cards = deck[2:7]
 
     features = embed_with_community(hole_cards, community_cards)
-    wins, _, _ = estimate_hand_strength(hole_cards, community_cards, samples=10_000)
+    wins, _, _ = estimate_hand_strength(hole_cards, community_cards, simulations=simulations)
     return street, features, wins
 
-def generate_training_data(n_samples: int = 1_000_000):
+def generate_hand_equity(n_hands: int = 1_000_000, simulations: int = 10_000):
     num_workers = cpu_count()
     print(f"Generating training data using {num_workers} workers...")
 
+    wrapped_func = partial(sample_hand_data, simulations=simulations)
     with Pool(processes=num_workers) as pool:
-        results = list(tqdm(pool.imap(sample_hand_data, range(n_samples)), total=n_samples))
+        results = list(tqdm(pool.imap(wrapped_func, range(n_hands)), total=n_hands))
 
     X_cat = np.array([res[0] for res in results], dtype=np.uint8)
     X = np.array([res[1] for res in results], dtype=np.float32)

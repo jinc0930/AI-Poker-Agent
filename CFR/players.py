@@ -1,33 +1,36 @@
-import numpy as np
-from cfr import  CFRTree, get_info_state
-from hand_strenth import estimate_hand_strength
-from pypokerengine.engine.card import Card
+import torch
+from cfr import get_info_set
+from cfr_model import DeepCFRModel
+from fast_hand_strength import estimate_hand_strength
 from pypokerengine.players import BasePokerPlayer
-from utils import extract_action
+from utils import ACTIONS,get_device
 import random as rand
 
 class CFRPokerPlayer(BasePokerPlayer):
-    def __init__(self, game_tree: CFRTree):
+    def __init__(self, model: DeepCFRModel):
         super().__init__()
-        self.game_tree = game_tree
+        self.device = get_device()
+        self.model: DeepCFRModel = model
+        self.model.to(self.device)
+        self.model.eval()
 
     def declare_action(self, valid_actions, hole_card, round_state):
-        info_state = get_info_state(round_state, hole_card, round_state['community_card'], self.uuid)
-        node, _ = self.game_tree.get_nearest_node(round_state['street'], info_state)
-        strategy = node.get_average_strategy()
-        valid_strategy = list(map(extract_action, valid_actions))
-        probs = [strategy.get(a, 0.0) for a in valid_strategy]
-        prob_sum = sum(probs)
-        if prob_sum <= 0:
-            return "call"
-
-        best_action = valid_strategy[np.argmax(probs)]
-        return best_action
-
-    @classmethod
-    def load_from_file(cls, filename = './cfr.pickle'):
-        game_tree = CFRTree.load(filename)
-        return cls(game_tree)
+        with torch.no_grad():
+            hole_cards, community_cards, street, betting_feats = get_info_set(round_state, hole_card, round_state['community_card'], self.uuid)
+            logits = self.model(
+                torch.tensor(hole_cards, device=self.device).unsqueeze(0),
+                torch.tensor(community_cards, device=self.device).unsqueeze(0),
+                torch.tensor(street, device=self.device).unsqueeze(0),
+                torch.tensor(betting_feats, device=self.device).unsqueeze(0)
+            ).squeeze(0)
+            mask = torch.tensor(
+                [action in valid_actions for action in ACTIONS],
+                device=logits.device,
+                dtype=torch.bool
+            )
+            masked_logits = logits.masked_fill(~mask, float('-inf'))
+            chosen_idx = torch.argmax(masked_logits).item()
+            return ACTIONS[chosen_idx]
 
     def receive_game_start_message(self, game_info): pass
     def receive_round_start_message(self, round_count, hole_card, seats): pass
@@ -45,7 +48,7 @@ class MonteCarloPlayer(BasePokerPlayer):
         win_rate, _, _ = estimate_hand_strength(
             hole_cards = hole_card,
             community_cards = round_state["community_card"],
-            samples=max(int(100 * self.difficulty), 10)
+            simulations=max(int(100 * self.difficulty), 10)
         )
         raise_action = next((a for a in valid_actions if a['action'] == 'raise'), None)
         actions = (1 if action['action'] == 'RAISE' else 0 for street in reversed(['preflop', 'flop', 'turn', 'river'])
@@ -87,6 +90,45 @@ class RandomPlayer(BasePokerPlayer):
         action = call_action_info["action"]
         return action
 
+    def receive_game_start_message(self, game_info): pass
+    def receive_round_start_message(self, round_count, hole_card, seats): pass
+    def receive_street_start_message(self, street, round_state): pass
+    def receive_game_update_message(self, action, round_state): pass
+    def receive_round_result_message(self, winners, hand_info, round_state): pass
+
+class CallPlayer(BasePokerPlayer):
+    def declare_action(self, valid_actions, hole_card, round_state):
+        # valid_actions format => [FOLD, CALL, RAISE]
+        for action_info in valid_actions:
+            if action_info["action"] == "call":
+                return action_info["action"]
+        return valid_actions[0]["action"]
+
+    def receive_game_start_message(self, game_info): pass
+    def receive_round_start_message(self, round_count, hole_card, seats): pass
+    def receive_street_start_message(self, street, round_state): pass
+    def receive_game_update_message(self, action, round_state): pass
+    def receive_round_result_message(self, winners, hand_info, round_state): pass
+
+class BluffPlayer(BasePokerPlayer):
+    def declare_action(self, valid_actions, hole_card, round_state):
+        for action_info in valid_actions:
+            if action_info["action"] == "raise":
+                return action_info["action"]
+        for action_info in valid_actions:
+            if action_info["action"] == "call":
+                return action_info["action"]
+        return valid_actions[0]["action"]
+
+    def receive_game_start_message(self, game_info): pass
+    def receive_round_start_message(self, round_count, hole_card, seats): pass
+    def receive_street_start_message(self, street, round_state): pass
+    def receive_game_update_message(self, action, round_state): pass
+    def receive_round_result_message(self, winners, hand_info, round_state): pass
+
+class FoldPlayer(BasePokerPlayer):
+    def declare_action(self, valid_actions, hole_card, round_state):
+        return valid_actions[0]["action"]
     def receive_game_start_message(self, game_info): pass
     def receive_round_start_message(self, round_count, hole_card, seats): pass
     def receive_street_start_message(self, street, round_state): pass

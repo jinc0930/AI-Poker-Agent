@@ -1,9 +1,20 @@
+from functools import lru_cache
+import random
 from typing import Final, List, Tuple
 from collections import Counter
+from typing import List, Tuple
 
 SUITS: Final[str] = "CDHS"
 RANKS: Final[str] = "23456789TJQKA"
 STREET_MAP: Final[dict] = {'preflop': 0, 'flop': 1, 'turn': 2, 'river': 3}
+
+def generate_cards() -> Tuple[List[str], List[str]]:
+    deck = [s + r for s in SUITS for r in RANKS]
+    random.shuffle(deck)
+    hole_cards = deck[:2]
+    num_community_cards = random.choice([0, 3, 4, 5])
+    community_cards = deck[2:2 + num_community_cards]
+    return hole_cards, community_cards
 
 def card_to_num(card_str: str) -> Tuple[int, int]:
     """Returns (rank, suit)"""
@@ -156,6 +167,7 @@ def count_ranks(hole_cards: List[str], community_cards: List[str]) -> dict[str, 
     
     return results
 
+@lru_cache(maxsize=10_000)
 def embed_hole_cards(card1: str, card2: str) -> List[float]:
     """Base hole card embeddings, dim = 5"""
 
@@ -174,7 +186,6 @@ def embed_hole_cards(card1: str, card2: str) -> List[float]:
     
 def embed_with_community(hole_cards: List[str], community_cards: List[str]) -> List[float]:
     """Embed both hole cards with community, dim = 17"""
-
     card1, card2 = hole_cards
     base_embedding = embed_hole_cards(card1, card2)
     ranks = count_ranks(hole_cards, community_cards)

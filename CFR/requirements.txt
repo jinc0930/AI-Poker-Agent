@@ -1,5 +1,5 @@
 numpy==2.2.4
 phevaluator==0.5.3.1
-torch==2.6.0+cpu
+torch==2.6.0
 tqdm==4.67.1
 rbloom==1.1.0

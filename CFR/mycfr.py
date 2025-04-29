@@ -27,7 +27,7 @@ elif torch.cuda.is_available():
 else:
     DEVICE = torch.device("cpu")
 
-TRAIN_ITERATIONS = 7_000
+TRAIN_ITERATIONS = 50
 TRAIN_EPOCHS: Final[int] = 10_000
 TRAINING_PATIENCE: Final[int] = 100
 TRAIN_BATCH_SIZE: Final[int] = 10_000

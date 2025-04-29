@@ -1,5 +1,5 @@
 import torch
-from cfr import get_info_set
+import  mycfr
 from cfr_model import DeepCFRModel
 from fast_hand_strength import estimate_hand_strength
 from pypokerengine.players import BasePokerPlayer
@@ -16,7 +16,7 @@ class CFRPokerPlayer(BasePokerPlayer):
 
     def declare_action(self, valid_actions, hole_card, round_state):
         with torch.no_grad():
-            hole_cards, community_cards, street, betting_feats = get_info_set(round_state, hole_card, round_state['community_card'], self.uuid)
+            hole_cards, community_cards, street, betting_feats = mycfr.get_info_set(round_state, hole_card, round_state['community_card'], self.uuid)
             logits = self.model(
                 torch.tensor(hole_cards, device=self.device).unsqueeze(0),
                 torch.tensor(community_cards, device=self.device).unsqueeze(0),

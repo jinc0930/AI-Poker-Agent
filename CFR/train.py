@@ -1,4 +1,4 @@
-from tqdm import tqdm
+import tqdm
 from mycfr import deep_cfr
 
 if __name__ == "__main__":

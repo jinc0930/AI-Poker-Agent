@@ -6,7 +6,7 @@ pip install tensorboard
 pip install phevaluator
 
     python3 ./PPO/train.py  
-    tensorboard --logdir ./PPO/runs 
+    tensorboard --logdir ./PPO/logs
 
 ## Human testing against poker agent
 pip install pypokergui

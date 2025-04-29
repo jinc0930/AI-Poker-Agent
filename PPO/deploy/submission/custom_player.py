@@ -8,7 +8,7 @@ from torch.distributions import Categorical
 class CustomPlayer(BasePokerPlayer):
     def declare_action(self, valid_actions, hole_card, round_state):
         if not hasattr(self, 'model'):
-            self.model = PPO(filename='./Star_110100.pt')
+            self.model = PPO(filename='./FrozenStar_50100.pt')
             self.model.eval()
         my_stack, opponent_stack = get_stacks(round_state["seats"], self.uuid)
         if not hasattr(self, 'memory'):

@@ -400,7 +400,8 @@ if __name__ == '__main__':
             trainer.print_rank()
             trainer.update_population()
             #trainer.replicate('exploiter')
-            trainer.replicate('main')
+            if i > 100_000:
+                trainer.replicate('main')
 
         if i > 0 and i % 20 == 0:
             wr, chips = trainer.evaluate(episodes=100)

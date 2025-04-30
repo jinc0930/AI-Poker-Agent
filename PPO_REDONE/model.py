@@ -25,11 +25,11 @@ class PPO(nn.Module):
         # Set device to CUDA if available or provided device
         self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        self.fc1 = nn.Linear(23, 64)
-        self.fc2 = nn.Linear(64, 64)
-        self.fc3 = nn.Linear(64, 64)
-        self.fc_pi = nn.Linear(64, 3)
-        self.fc_v = nn.Linear(64, 1)
+        self.fc1 = nn.Linear(23, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, 128)
+        self.fc_pi = nn.Linear(128, 3)
+        self.fc_v = nn.Linear(128, 1)
         self.optimizer = optim.Adam(self.parameters(), lr=hyperparams.learning_rate)
 
         # Orthogonal initialization
@@ -199,4 +199,4 @@ class PPO(nn.Module):
         """Load the entire model"""
         model = torch.load(filename)
         model.eval()
-        return model
+        return model  

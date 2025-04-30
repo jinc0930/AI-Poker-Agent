@@ -42,6 +42,16 @@ def run_game(player1: BasePokerPlayer, name1: str, player2: BasePokerPlayer, nam
             config.register_player(name=name1, algorithm=player1)
     return start_poker(config, verbose=verbose)
 
+def run_n_games(player1: BasePokerPlayer, name1: str, player2: BasePokerPlayer, name2: str, n_games: int = 100) -> float:
+    """Run n games and return win rate of player1 """
+    wins = 0
+    for i in range(n_games):
+        result = run_game(player1, name1, player2, name2, first=i % 2 == 0)
+        won, _, _ = is_winner(result, name1)
+        if won:
+            wins += 1
+    return wins / n_games
+
 def apply_action(emulator: Emulator, game_state: Any, action: str) -> Tuple[dict, dict]:
     updated_state, messages = RoundManager.apply_action(game_state, action)
     events = [emulator.create_event(message[1]["message"]) for message in messages]

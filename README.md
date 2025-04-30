@@ -1,76 +1,24 @@
 ## Term Project
 
 ### Set up environment
-using the conda or pyenv
+Libraries:
+numpy==2.0.2
+torch==2.6.0
 
-- conda create -n CompSci683 python=x.x
-- source activate CompSci683
+### Latest Version
+./PPO_REDONE/submission
 
-replace the CompSci683 with whatever name you want
-replace x.x with the current python version
-https://conda.io/docs/index.html
+custom_player = PPO player
+all other files in the 'submission' folder is needed to run it
 
-pip install PyPokerEngine  
-https://ishikota.github.io/PyPokerEngine/
+To test your agent:
+uncomment in custom_player.py
 
-
-
-testing installmement:
-
+```python3
+# uncomment to run against other players
+# if __name__ == "__main__":
+#     wr = run_n_games(setup_ai(), 'AI', CallPlayer(), 'AI2')
+#     print(f'yippie{wr}')
 ```
-import pypokerengine   
-print("hello world")
-```
-
-
-
-### Create your own player
-#### Example player
-
-```
-
-class RaisedPlayer(BasePokerPlayer):
-
-  def declare_action(self, valid_actions, hole_card, round_state):
-    #Implement your code
-    return action
-
-  def receive_game_start_message(self, game_info):
-    pass
-
-  def receive_round_start_message(self, round_count, hole_card, seats):
-    pass
-
-  def receive_street_start_message(self, street, round_state):
-    pass
-
-  def receive_game_update_message(self, action, round_state):
-    pass
-
-  def receive_round_result_message(self, winners, hand_info, round_state):
-    pass
-```
-#### Example Game
-The example game is in the example.py
-
-#### Information for the game
-```valid_actions```: vaild action list
-
-
-```
-[
-    { "action" : "fold"  },
-    { "action" : "call" },
-    { "action" : "raise" }
-]
-OR 
-[
-    {"action": "fold"},
-    {"action": "call"}
-]
-```
-
-In the limited version, user only allowed to raise for four time in one round game.    
-In addition, in each street (preflop,flop,turn,river),each player only allowed to raise for four times.
-
-Other information is similar to the PyPokerEngine,please check the detail about the parameter [link](https://github.com/ishikota/PyPokerEngine/blob/master/AI_CALLBACK_FORMAT.md)
+change "CallPlayer()" to your player
+wr shown is PPO winrate against the target player

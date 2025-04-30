@@ -1,5 +1,6 @@
 import torch
-from utils import encode_infoset
+from PPO_REDONE.players import CallPlayer
+from utils import encode_infoset, run_n_games
 from model import PPO
 from pypokerengine.players import BasePokerPlayer
 from torch.distributions import Categorical
@@ -44,3 +45,8 @@ class CustomPlayer(BasePokerPlayer):
 
 def setup_ai():
     return CustomPlayer()
+
+# uncomment to run against other players
+# if __name__ == "__main__":
+#     wr = run_n_games(setup_ai(), 'AI', CallPlayer(), 'AI2')
+#     print(f'yippie{wr}')

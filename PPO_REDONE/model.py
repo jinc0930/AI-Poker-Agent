@@ -27,7 +27,6 @@ class PPO(nn.Module):
 
         self.fc1 = nn.Linear(23, 128)
         self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, 128)
         self.fc_pi = nn.Linear(128, 3)
         self.fc_v = nn.Linear(128, 1)
         self.optimizer = optim.Adam(self.parameters(), lr=hyperparams.learning_rate)
@@ -35,13 +34,11 @@ class PPO(nn.Module):
         # Orthogonal initialization
         nn.init.orthogonal_(self.fc1.weight, gain=nn.init.calculate_gain('relu'))
         nn.init.orthogonal_(self.fc2.weight, gain=nn.init.calculate_gain('relu'))
-        nn.init.orthogonal_(self.fc3.weight, gain=nn.init.calculate_gain('relu'))
         nn.init.orthogonal_(self.fc_pi.weight, gain=1.0)
 
         # Zero bias initialization
         nn.init.zeros_(self.fc1.bias)
         nn.init.zeros_(self.fc2.bias)
-        nn.init.zeros_(self.fc3.bias)
         nn.init.zeros_(self.fc_pi.bias)
 
         if filename is not None:

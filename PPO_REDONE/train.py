@@ -132,9 +132,9 @@ class PFSP():
 
         if not evaluate_agents:
             self.evaluate_agents = [
-                # Agent('RandomPlayer', load = lambda: RandomPlayer(), is_frozen = True ),
+                Agent('RandomPlayer', load = lambda: RandomPlayer(), is_frozen = True ),
                 Agent('CallPlayer', load = lambda: CallPlayer(), is_frozen = True ),
-                Agent('BluffPlayer', load = lambda: BluffPlayer(), is_frozen = True ),
+                Agent('RaisePlayer', load = lambda: BluffPlayer(), is_frozen = True ),
             ]
 
         self.exploiter_agents = [
@@ -185,6 +185,10 @@ class PFSP():
             a_agent.rank = i
             print(f"{a_agent.get_display_name():<30} {(a_agent.wr * 100.):<6.2f}% {a_agent.games:<5}")
 
+    def compute_wrs(self):
+        agent = self.main_agents[0]
+        for i, a_agent in enumerate(self.frozen_agents):
+            self.writer.add_scalar(agent.name + '/WRvs' + a_agent.get_display_name(), a_agent.wr * 100., agent.episodes)
 
     def add_frozen_agent(self, agent: Agent):
         self.frozen_agents.append(agent)
@@ -385,7 +389,7 @@ if __name__ == '__main__':
     trainer = PFSP(
         writer=writer,
         population_size = 30,
-        snapshot_dir = 'starstar',
+        snapshot_dir = 'xstar',
         load_snapshot = True,
         main_agents=main_agents,
         frozen_agents=frozen_agents
@@ -396,18 +400,20 @@ if __name__ == '__main__':
     for i in range(2000):
         wr = trainer.train_iteration(episodes=100)
         # update league
+        trainer.compute_wrs()
+
         if i > 0 and i % 100 == 0:
             trainer.print_rank()
             trainer.update_population()
             #trainer.replicate('exploiter')
-            if i > 100_000:
-                trainer.replicate('main')
+            # if i > 100_000:
+            #     trainer.replicate('main')
 
-        if i > 0 and i % 20 == 0:
-            wr, chips = trainer.evaluate(episodes=100)
-            print(f"Iteration {i}, Win rate evaluation: {(wr * 100.):.2f}%, Chips won: {chips}")
-            writer.add_scalar(trainer.main_agents[0].name + '/EvalWR', wr, eval_episodes)
-            writer.add_scalar(trainer.main_agents[0].name + '/EvalChips', chips, eval_episodes)
-            eval_episodes += 1
+        # if i > 0 and i % 20 == 0:
+        #     wr, chips = trainer.evaluate(episodes=100)
+        #     print(f"Iteration {i}, Win rate evaluation: {(wr * 100.):.2f}%, Chips won: {chips}")
+        #     writer.add_scalar(trainer.main_agents[0].name + '/EvalWR', wr, eval_episodes)
+        #     writer.add_scalar(trainer.main_agents[0].name + '/EvalChips', chips, eval_episodes)
+        #     eval_episodes += 1
 
     writer.close()
